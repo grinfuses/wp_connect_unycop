@@ -33,7 +33,7 @@ function sync_products_and_export_orders() {
 
 // Función para actualizar productos desde el CSV de stock
 function sync_stock_from_csv() {
-    $csv_file = '/var/www/html/wp-content/uploads/stocklocal.csv'; // Especifica la ruta local
+    $csv_file = '/var/www/html/wp-content/uploads/unycop/stocklocal.csv'; // Especifica la ruta local
     
     if (!file_exists($csv_file)) {
         return;
@@ -106,7 +106,7 @@ function generate_orders_csv() {
     $orders = wc_get_orders($args);
 
     // Crear el archivo CSV
-    $csv_file = '/var/www/html/wp-content/uploads/orders.csv'; // Especifica la ruta local
+    $csv_file = '/var/www/html/wp-content/uploads/unycop/orders.csv'; // Especifica la ruta local
     $handle = fopen($csv_file, 'w');
 
     // Encabezados del CSV según las especificaciones proporcionadas
