@@ -1,7 +1,7 @@
 <?php
 /*
-Plugin Name: WooCommerce Product Sync and Order Export
-Description: Actualiza productos desde un CSV de stock y genera un archivo orders.csv con los pedidos, almacenándolo localmente cada hora.
+Plugin Name: WooCommerce Unycop Connector
+Description: Actualiza productos desde un CSV de stock y genera un archivo orders.csv con los pedidos sincronizándolo con Unycop, almacenándolo localmente cada hora.
 Version: 1.0
 Author: jnaranjo
 */
