@@ -1,9 +1,9 @@
 <?php
 /*
 Plugin Name: WooCommerce Unycop Connector
-Description: Actualiza productos desde un CSV de stock y genera un archivo orders.csv con los pedidos sincronizándolo con Unycop, almacenándolo localmente cada hora.
-Version: 1.0
-Author: jnaranjo
+Description: Sincroniza WooCommerce con Unycop Win importando el stock de productos desde un archivo CSV y exportando los pedidos completados a orders.csv. Incluye panel de configuración y endpoints REST API seguros para una integración eficiente en farmacia.
+Version: 2.0
+Author: jnaranjo - illoque.com
 */
 
 // Hook para programar la sincronización de productos y la generación del CSV de pedidos
