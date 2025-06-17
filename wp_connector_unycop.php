@@ -10,10 +10,11 @@ Author: jnaranjo
 register_activation_hook(__FILE__, 'wp_schedule_product_sync');
 register_deactivation_hook(__FILE__, 'wp_clear_product_sync_schedule');
 
-// Programar la tarea cada hora
+// Programar la tarea cada hora (ahora configurable)
 function wp_schedule_product_sync() {
+    $frequency = get_option('unycop_cron_frequency', 'hourly');
     if (!wp_next_scheduled('product_sync_event')) {
-        wp_schedule_event(time(), 'hourly', 'product_sync_event');
+        wp_schedule_event(time(), $frequency, 'product_sync_event');
     }
 }
 
@@ -33,7 +34,8 @@ function sync_products_and_export_orders() {
 
 // Función para actualizar productos desde el CSV de stock
 function sync_stock_from_csv() {
-    $csv_file = '/var/www/html/wp-content/uploads/unycop/stocklocal.csv'; // Especifica la ruta local
+    $csv_path = get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/');
+    $csv_file = rtrim($csv_path, '/').'/stocklocal.csv';
     
     if (!file_exists($csv_file)) {
         return;
@@ -98,15 +100,8 @@ function sync_stock_from_csv() {
 
 // Función para generar el archivo orders.csv y guardarlo en local
 function generate_orders_csv() {
-    // Obtener pedidos completados de WooCommerce
-    $args = array(
-        'status' => 'completed',
-        'limit' => -1
-    );
-    $orders = wc_get_orders($args);
-
-    // Crear el archivo CSV
-    $csv_file = '/var/www/html/wp-content/uploads/unycop/orders.csv'; // Especifica la ruta local
+    $csv_path = get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/');
+    $csv_file = rtrim($csv_path, '/').'/orders.csv';
     $handle = fopen($csv_file, 'w');
 
     // Encabezados del CSV según las especificaciones proporcionadas
@@ -118,6 +113,13 @@ function generate_orders_csv() {
         'DNI', 'Dirección', 'CP', 'Ciudad', 'Provincia', 
         'Código Nacional del Producto', 'Cantidad', 'PVP Web'
     ), ';');
+
+    // Obtener pedidos completados de WooCommerce
+    $args = array(
+        'status' => 'completed',
+        'limit' => -1
+    );
+    $orders = wc_get_orders($args);
 
     foreach ($orders as $order) {
         $customer_id = $order->get_customer_id();
@@ -168,4 +170,114 @@ function generate_orders_csv() {
     fclose($handle);
 
     // El archivo se almacena en la ubicación especificada
+}
+
+// Hook para generar orders.csv tras cada venta completada
+add_action('woocommerce_order_status_completed', 'generate_orders_csv');
+
+// =====================
+// ADMINISTRACIÓN PLUGIN
+// =====================
+
+// Añadir página de opciones al menú de administración
+add_action('admin_menu', 'unycop_connector_admin_menu');
+function unycop_connector_admin_menu() {
+    add_options_page(
+        'Unycop Connector',
+        'Unycop Connector',
+        'manage_options',
+        'unycop-connector-settings',
+        'unycop_connector_settings_page'
+    );
+}
+
+// Registrar opciones
+add_action('admin_init', 'unycop_connector_register_settings');
+function unycop_connector_register_settings() {
+    register_setting('unycop_connector_options', 'unycop_csv_path');
+    register_setting('unycop_connector_options', 'unycop_token');
+    register_setting('unycop_connector_options', 'unycop_cron_frequency');
+}
+
+// Página de opciones
+function unycop_connector_settings_page() {
+    ?>
+    <div class="wrap">
+        <h1>Configuración Unycop Connector</h1>
+        <form method="post" action="options.php">
+            <?php settings_fields('unycop_connector_options'); ?>
+            <?php do_settings_sections('unycop_connector_options'); ?>
+            <table class="form-table">
+                <tr valign="top">
+                    <th scope="row">Ruta de los archivos CSV</th>
+                    <td><input type="text" name="unycop_csv_path" value="<?php echo esc_attr(get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/')); ?>" size="60" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row">Token de seguridad</th>
+                    <td><input type="text" name="unycop_token" value="<?php echo esc_attr(get_option('unycop_token', 'unycop_secret_token')); ?>" size="40" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row">Frecuencia del cron de stock</th>
+                    <td>
+                        <select name="unycop_cron_frequency">
+                            <?php $freq = get_option('unycop_cron_frequency', 'hourly'); ?>
+                            <option value="hourly" <?php selected($freq, 'hourly'); ?>>Cada hora</option>
+                            <option value="twicedaily" <?php selected($freq, 'twicedaily'); ?>>Dos veces al día</option>
+                            <option value="daily" <?php selected($freq, 'daily'); ?>>Diario</option>
+                        </select>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
+}
+
+// =====================
+// ENDPOINTS REST API PARA UNYCOP WIN
+// =====================
+add_action('rest_api_init', function () {
+    register_rest_route('unycop/v1', '/orders', array(
+        'methods' => 'GET',
+        'callback' => 'unycop_api_get_orders_csv',
+        'permission_callback' => '__return_true',
+    ));
+    register_rest_route('unycop/v1', '/stock-update', array(
+        'methods' => 'POST',
+        'callback' => 'unycop_api_stock_update',
+        'permission_callback' => '__return_true',
+    ));
+});
+
+function unycop_api_check_token($request) {
+    $token = isset($request['token']) ? $request['token'] : '';
+    $valid_token = get_option('unycop_token', 'unycop_secret_token');
+    return hash_equals($valid_token, $token);
+}
+
+// Endpoint para descargar orders.csv
+function unycop_api_get_orders_csv($request) {
+    if (!unycop_api_check_token($request)) {
+        return new WP_REST_Response(['error' => 'Token inválido'], 403);
+    }
+    $csv_path = get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/');
+    $csv_file = rtrim($csv_path, '/').'/orders.csv';
+    if (!file_exists($csv_file)) {
+        return new WP_REST_Response(['error' => 'Archivo no encontrado'], 404);
+    }
+    $csv_content = file_get_contents($csv_file);
+    return new WP_REST_Response($csv_content, 200, [
+        'Content-Type' => 'text/csv',
+        'Content-Disposition' => 'attachment; filename="orders.csv"'
+    ]);
+}
+
+// Endpoint para forzar actualización de stock
+function unycop_api_stock_update($request) {
+    if (!unycop_api_check_token($request)) {
+        return new WP_REST_Response(['error' => 'Token inválido'], 403);
+    }
+    sync_stock_from_csv();
+    return new WP_REST_Response(['success' => true], 200);
 }
