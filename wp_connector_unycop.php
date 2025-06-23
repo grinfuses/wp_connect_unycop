@@ -116,14 +116,29 @@ function generate_orders_csv() {
     $csv_file = $csv_path . '/orders.csv';
     $handle = fopen($csv_file, 'w');
 
-    // Encabezados del CSV según las especificaciones proporcionadas
+    // Encabezados del CSV según el orden del manual de Unycop
     fputcsv($handle, array(
-        'Referencia del pedido', 'ID del pedido', 'Fecha', 'Total Productos', 
-        'Total Pago', 'Gastos de Envío', 'Precio Unitario sin IVA', 
-        'Precio Unitario con IVA', 'ID Cliente Web', 'Nombre Cliente', 
-        'Apellidos Cliente', 'Email Cliente', 'Teléfono Cliente', 
-        'DNI', 'Dirección', 'CP', 'Ciudad', 'Provincia', 
-        'Código Nacional del Producto', 'Cantidad', 'PVP Web'
+        'Referencia del pedido', // 1
+        'id del pedido',         // 2
+        'Fecha',                // 3
+        'Id cliente web',       // 4
+        'Nombre cliente',       // 5
+        'Apellidos cliente',    // 6
+        'Email cliente',        // 7
+        'Teléfono cliente',     // 8
+        'DNI',                  // 9
+        'dirección',            // 10
+        'CP',                   // 11
+        'Ciudad',               // 12
+        'Provincia',            // 13
+        'Código nacional del producto', // 14
+        'Cantidad',             // 15
+        'PVP web',              // 16
+        'Total Productos',      // 17
+        'Total pago',           // 18
+        'Gastos de envío',      // 19
+        'Precio unitario sin IVA', // 20
+        'Precio unitario con IVA'  // 21
     ), ';');
 
     // Obtener pedidos completados de WooCommerce
@@ -139,39 +154,41 @@ function generate_orders_csv() {
         $billing_address = $order->get_address('billing');
         $shipping_cost = $order->get_shipping_total();
         $total_paid = $order->get_total();
+        $total_products = $order->get_subtotal() + $order->get_total_tax(); // Total productos con IVA
 
         foreach ($order->get_items() as $item) {
             $product = $item->get_product();
             $unit_price_excl_tax = $item->get_subtotal() / $item->get_quantity(); // Precio sin IVA
             $unit_price_incl_tax = $item->get_total() / $item->get_quantity(); // Precio con IVA
-            $national_code = substr($product->get_sku(), 0, 6); // Suponiendo que el SKU contiene el código nacional
+            $national_code = substr($product->get_sku(), 0, 6); // 6 primeras cifras del SKU
+            $pvp_web = $unit_price_excl_tax; // Precio unitario sin IVA y sin descuento
 
             // Formatear la fecha del pedido
             $order_date = $order->get_date_created()->date('d/m/Y H:i:s');
 
-            // Crear una línea de datos en el CSV
+            // Crear una línea de datos en el CSV en el orden correcto
             $data = array(
-                $order->get_meta('observaciones_unycop', true), // Referencia del pedido (campo observaciones)
-                $order->get_id(),
-                $order_date,
-                $order->get_subtotal(), // Total de productos con IVA
-                $total_paid, // Total pagado
-                $shipping_cost, // Gastos de envío
-                $unit_price_excl_tax, // Precio unitario sin IVA
-                $unit_price_incl_tax, // Precio unitario con IVA
-                $customer_id,
-                $billing_address['first_name'], // Nombre cliente
-                $billing_address['last_name'], // Apellidos cliente
-                $billing_address['email'], // Email cliente
-                $billing_address['phone'], // Teléfono cliente
-                $billing_address['dni'], // DNI (puede necesitarse un campo personalizado)
-                $billing_address['address_1'], // Dirección
-                $billing_address['postcode'], // Código postal
-                $billing_address['city'], // Ciudad
-                $billing_address['state'], // Provincia
-                $national_code, // Código nacional del producto
-                $item->get_quantity(), // Cantidad vendida
-                $unit_price_excl_tax // PVP web (precio unitario sin IVA y sin descuento)
+                $order->get_meta('observaciones_unycop', true), // 1 Referencia del pedido
+                $order->get_id(),                               // 2 id del pedido
+                $order_date,                                    // 3 Fecha
+                $customer_id,                                   // 4 Id cliente web
+                $billing_address['first_name'],                 // 5 Nombre cliente
+                $billing_address['last_name'],                  // 6 Apellidos cliente
+                $billing_address['email'],                      // 7 Email cliente
+                $billing_address['phone'],                      // 8 Teléfono cliente
+                $billing_address['dni'],                        // 9 DNI
+                $billing_address['address_1'],                  // 10 dirección
+                $billing_address['postcode'],                   // 11 CP
+                $billing_address['city'],                       // 12 Ciudad
+                $billing_address['state'],                      // 13 Provincia
+                $national_code,                                 // 14 Código nacional del producto
+                $item->get_quantity(),                          // 15 Cantidad
+                $pvp_web,                                       // 16 PVP web
+                $total_products,                                // 17 Total Productos (con IVA)
+                $total_paid,                                    // 18 Total pago
+                $shipping_cost,                                 // 19 Gastos de envío
+                $unit_price_excl_tax,                           // 20 Precio unitario sin IVA
+                $unit_price_incl_tax                            // 21 Precio unitario con IVA
             );
 
             // Escribir la línea de datos en el CSV
@@ -180,7 +197,6 @@ function generate_orders_csv() {
     }
 
     fclose($handle);
-
     // El archivo se almacena en la ubicación especificada
 }
 
