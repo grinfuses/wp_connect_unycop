@@ -34,7 +34,7 @@ function sync_products_and_export_orders() {
 
 // Función para actualizar productos desde el CSV de stock
 function sync_stock_from_csv() {
-    $csv_path = get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/');
+    $csv_path = get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/');
     $csv_file = rtrim($csv_path, '/').'/stocklocal.csv';
     
     if (!file_exists($csv_file)) {
@@ -100,7 +100,7 @@ function sync_stock_from_csv() {
 
 // Función para generar el archivo orders.csv y guardarlo en local
 function generate_orders_csv() {
-    $csv_path = get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/');
+    $csv_path = get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/');
     $csv_file = rtrim($csv_path, '/').'/orders.csv';
     $handle = fopen($csv_file, 'w');
 
@@ -210,7 +210,7 @@ function unycop_connector_settings_page() {
             <table class="form-table">
                 <tr valign="top">
                     <th scope="row">Ruta de los archivos CSV</th>
-                    <td><input type="text" name="unycop_csv_path" value="<?php echo esc_attr(get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/')); ?>" size="60" /></td>
+                    <td><input type="text" name="unycop_csv_path" value="<?php echo esc_attr(get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/')); ?>" size="60" /></td>
                 </tr>
                 <tr valign="top">
                     <th scope="row">Token de seguridad</th>
@@ -258,15 +258,47 @@ function unycop_api_check_token($request) {
 
 // Endpoint para descargar orders.csv
 function unycop_api_get_orders_csv($request) {
+    // Log para debugging
+    error_log('Unycop API: Petición GET a /orders recibida');
+    
     if (!unycop_api_check_token($request)) {
+        error_log('Unycop API: Token inválido - Token recibido: ' . (isset($request['token']) ? $request['token'] : 'NO_TOKEN'));
         return new WP_REST_Response(['error' => 'Token inválido'], 403);
     }
-    $csv_path = get_option('unycop_csv_path', '/var/www/html/wp-content/uploads/unycop/');
+    
+    $csv_path = get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/');
     $csv_file = rtrim($csv_path, '/').'/orders.csv';
-    if (!file_exists($csv_file)) {
-        return new WP_REST_Response(['error' => 'Archivo no encontrado'], 404);
+    
+    error_log('Unycop API: Ruta configurada: ' . $csv_path);
+    error_log('Unycop API: Archivo completo: ' . $csv_file);
+    error_log('Unycop API: ¿Existe el directorio? ' . (is_dir($csv_path) ? 'SÍ' : 'NO'));
+    error_log('Unycop API: ¿Existe el archivo? ' . (file_exists($csv_file) ? 'SÍ' : 'NO'));
+    
+    if (!is_dir($csv_path)) {
+        error_log('Unycop API: El directorio no existe: ' . $csv_path);
+        return new WP_REST_Response(['error' => 'Directorio no encontrado: ' . $csv_path], 404);
     }
+    
+    if (!file_exists($csv_file)) {
+        error_log('Unycop API: Archivo no encontrado en: ' . $csv_file);
+        
+        // Listar archivos en el directorio para debugging
+        $files = scandir($csv_path);
+        error_log('Unycop API: Archivos en el directorio: ' . print_r($files, true));
+        
+        return new WP_REST_Response(['error' => 'Archivo no encontrado: ' . $csv_file], 404);
+    }
+    
+    error_log('Unycop API: Archivo encontrado, tamaño: ' . filesize($csv_file) . ' bytes');
+    
     $csv_content = file_get_contents($csv_file);
+    if ($csv_content === false) {
+        error_log('Unycop API: Error al leer el archivo');
+        return new WP_REST_Response(['error' => 'Error al leer el archivo'], 500);
+    }
+    
+    error_log('Unycop API: Archivo leído correctamente, devolviendo contenido');
+    
     return new WP_REST_Response($csv_content, 200, [
         'Content-Type' => 'text/csv',
         'Content-Disposition' => 'attachment; filename="orders.csv"'
