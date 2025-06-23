@@ -47,6 +47,36 @@ All endpoints require the `token` parameter for authentication (set in the admin
    - Unycop Win generates `stocklocal.csv` with updated stock data and uploads it to the configured directory.
    - The plugin periodically (or via API trigger) reads this file and updates WooCommerce product stock.
 
+## Stocklocal.csv Flow and Testing
+
+### Minimal File Format Example
+```
+CN;Stock;PVP con IVA;IVA;Descripción
+00000000000000;1;12.50;21;Producto de prueba
+```
+- **CN:** Must match the SKU of the product in WooCommerce.
+- **Stock:** New stock value to set.
+- **PVP con IVA:** Product price with tax.
+- **IVA:** Tax percentage.
+- **Descripción:** (Optional) Product description.
+
+### How to Test Stock Update
+1. Place your `stocklocal.csv` file in the `wp-content/uploads/unycop/` directory of your WordPress installation.
+2. Trigger the stock update by making a **POST** request to:
+   ```
+   https://yourdomain.com/wp-json/unycop/v1/stock-update?token=YOUR_TOKEN
+   ```
+   You can use tools like Postman, Insomnia, or curl:
+   ```bash
+   curl -X POST "https://yourdomain.com/wp-json/unycop/v1/stock-update?token=YOUR_TOKEN"
+   ```
+   - Make sure to use the **POST** method, not GET.
+3. If successful, you will receive:
+   ```json
+   { "success": true }
+   ```
+4. Check WooCommerce to verify that the product(s) have been updated according to the CSV.
+
 ## Support
 For questions or support, contact: info@illoque.com
 
