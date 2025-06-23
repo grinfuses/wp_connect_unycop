@@ -34,8 +34,14 @@ function sync_products_and_export_orders() {
 
 // Función para actualizar productos desde el CSV de stock
 function sync_stock_from_csv() {
-    $csv_path = get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/');
-    $csv_file = rtrim($csv_path, '/').'/stocklocal.csv';
+    $custom_path = get_option('unycop_csv_path', '');
+    if ($custom_path) {
+        $csv_path = rtrim($custom_path, '/');
+    } else {
+        $upload_dir = wp_upload_dir();
+        $csv_path = $upload_dir['basedir'] . '/unycop';
+    }
+    $csv_file = $csv_path . '/stocklocal.csv';
     
     if (!file_exists($csv_file)) {
         return;
@@ -100,8 +106,14 @@ function sync_stock_from_csv() {
 
 // Función para generar el archivo orders.csv y guardarlo en local
 function generate_orders_csv() {
-    $csv_path = get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/');
-    $csv_file = rtrim($csv_path, '/').'/orders.csv';
+    $custom_path = get_option('unycop_csv_path', '');
+    if ($custom_path) {
+        $csv_path = rtrim($custom_path, '/');
+    } else {
+        $upload_dir = wp_upload_dir();
+        $csv_path = $upload_dir['basedir'] . '/unycop';
+    }
+    $csv_file = $csv_path . '/orders.csv';
     $handle = fopen($csv_file, 'w');
 
     // Encabezados del CSV según las especificaciones proporcionadas
@@ -201,6 +213,8 @@ function unycop_connector_register_settings() {
 
 // Página de opciones
 function unycop_connector_settings_page() {
+    $upload_dir = wp_upload_dir();
+    $default_path = $upload_dir['basedir'] . '/unycop/';
     ?>
     <div class="wrap">
         <h1>Configuración Unycop Connector</h1>
@@ -210,7 +224,7 @@ function unycop_connector_settings_page() {
             <table class="form-table">
                 <tr valign="top">
                     <th scope="row">Ruta de los archivos CSV</th>
-                    <td><input type="text" name="unycop_csv_path" value="<?php echo esc_attr(get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/')); ?>" size="60" /></td>
+                    <td><input type="text" name="unycop_csv_path" value="<?php echo esc_attr(get_option('unycop_csv_path', $default_path)); ?>" size="60" /> <br><small>Déjalo vacío para usar la ruta por defecto de WordPress: <?php echo esc_html($default_path); ?></small></td>
                 </tr>
                 <tr valign="top">
                     <th scope="row">Token de seguridad</th>
@@ -266,8 +280,14 @@ function unycop_api_get_orders_csv($request) {
         return new WP_REST_Response(['error' => 'Token inválido'], 403);
     }
     
-    $csv_path = get_option('unycop_csv_path', '/www/wp-content/uploads/unycop/');
-    $csv_file = rtrim($csv_path, '/').'/orders.csv';
+    $custom_path = get_option('unycop_csv_path', '');
+    if ($custom_path) {
+        $csv_path = rtrim($custom_path, '/');
+    } else {
+        $upload_dir = wp_upload_dir();
+        $csv_path = $upload_dir['basedir'] . '/unycop';
+    }
+    $csv_file = $csv_path . '/orders.csv';
     
     error_log('Unycop API: Ruta configurada: ' . $csv_path);
     error_log('Unycop API: Archivo completo: ' . $csv_file);
