@@ -98,6 +98,7 @@ function sync_stock_from_csv() {
 
                     // Actualiza stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualiza precios
                     $price_without_tax = $iva > 0 ? $price_with_tax / (1 + ($iva / 100)) : $price_with_tax;
@@ -753,6 +754,7 @@ function sync_stock_from_csv_detailed() {
 
                     // Actualiza stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualiza precios
                     $price_without_tax = $price_with_tax / (1 + ($iva / 100));
@@ -1619,6 +1621,7 @@ function unycop_update_stock_chunk_handler() {
                 $old_stock = $product->get_stock_quantity();
                 $old_price = $product->get_regular_price();
                 wc_update_product_stock($product_id, $stock, 'set');
+                update_post_meta($product_id, '_manage_stock', 'yes');
                 $price_without_tax = $price_with_tax / (1 + ($iva / 100));
                 $product->set_regular_price($price_with_tax);
                 $product->set_price($price_without_tax);
@@ -2412,6 +2415,7 @@ function unycop_execute_initial_migration() {
 
                     // Actualizar stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualizar precios
                     $price_without_tax = $price_with_tax / (1 + ($iva / 100));
@@ -2652,6 +2656,7 @@ function unycop_execute_initial_migration_chunk($offset, $chunk_size) {
 
                     // Actualizar stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualizar precios
                     $price_without_tax = $price_with_tax / (1 + ($iva / 100));
