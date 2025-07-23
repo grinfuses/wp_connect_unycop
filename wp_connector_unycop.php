@@ -3670,10 +3670,7 @@ function sync_stock_and_price_only() {
                     
                     error_log("UNYCOP SYNC DEBUG: Comparando stock para {$sku} - Actual: '{$old_stock}' → normalizado: {$old_stock_normalized}, CSV: '{$csv_stock}' → normalizado: {$csv_stock_normalized}");
                     if ($old_stock_normalized !== $csv_stock_normalized) {
-                        // Actualizar stock usando la función de WooCommerce
-                        wc_update_product_stock($product_id, $csv_stock, 'set');
-                        
-                        // También actualizar el objeto producto para asegurar consistencia
+                        // Usar solo el método del objeto producto para evitar conflictos
                         $product->set_stock_quantity($csv_stock);
                         
                         $stock_changes++;
@@ -3703,30 +3700,66 @@ function sync_stock_and_price_only() {
                     
                     // Solo guardar si hubo cambios
                     if ($changes_made) {
-                        // Guardar el producto
-                        $save_result = $product->save();
+                        // Usar métodos directos de base de datos para asegurar persistencia
+                        $update_success = true;
                         
-                        // Verificar que se guardó correctamente
-                        if ($save_result) {
-                            $products_updated++;
-                            update_post_meta($product_id, '_unycop_last_sync', current_time('mysql'));
-                            $changes_details[] = $change_info;
-                            error_log("UNYCOP SYNC DEBUG: Cambios guardados exitosamente para {$sku} (ID: {$product_id})");
+                        // Actualizar stock directamente en la base de datos
+                        if ($change_info['stock_changed']) {
+                            $stock_update = update_post_meta($product_id, '_stock', $csv_stock);
+                            if (!$stock_update) {
+                                error_log("UNYCOP SYNC ERROR: Fallo al actualizar stock en BD para {$sku}");
+                                $update_success = false;
+                            }
+                        }
+                        
+                        // Actualizar precio directamente en la base de datos
+                        if ($change_info['price_changed']) {
+                            $price_update = update_post_meta($product_id, '_regular_price', $csv_price);
+                            if (!$price_update) {
+                                error_log("UNYCOP SYNC ERROR: Fallo al actualizar precio en BD para {$sku}");
+                                $update_success = false;
+                            }
+                            
+                            // También actualizar el precio de venta
+                            $price_without_tax = $csv_iva > 0 ? $csv_price / (1 + ($csv_iva / 100)) : $csv_price;
+                            $sale_price_update = update_post_meta($product_id, '_price', $price_without_tax);
+                            if (!$sale_price_update) {
+                                error_log("UNYCOP SYNC ERROR: Fallo al actualizar precio de venta en BD para {$sku}");
+                                $update_success = false;
+                            }
+                        }
+                        
+                        if ($update_success) {
+                            // Limpiar caché específica del producto
+                            clean_post_cache($product_id);
+                            wp_cache_delete($product_id, 'posts');
+                            
+                            // Esperar un momento para que se procese la actualización
+                            usleep(100000); // 0.1 segundos
                             
                             // Verificar que los cambios se aplicaron correctamente
                             $updated_product = wc_get_product($product_id);
-                            $new_stock = $updated_product->get_stock_quantity();
-                            $new_price = $updated_product->get_regular_price();
-                            error_log("UNYCOP SYNC DEBUG: Verificación post-guardado para {$sku} - Stock: {$new_stock}, Precio: {$new_price}");
-                            
-                            // Verificar si los valores realmente cambiaron
-                            if ($new_stock == $csv_stock && $new_price == $csv_price) {
-                                error_log("UNYCOP SYNC DEBUG: ✅ Cambios confirmados para {$sku} - Stock y precio actualizados correctamente");
+                            if ($updated_product) {
+                                $new_stock = $updated_product->get_stock_quantity();
+                                $new_price = $updated_product->get_regular_price();
+                                error_log("UNYCOP SYNC DEBUG: Verificación post-guardado para {$sku} - Stock: {$new_stock}, Precio: {$new_price}");
+                                
+                                // Verificar si los valores realmente cambiaron
+                                if ($new_stock == $csv_stock && $new_price == $csv_price) {
+                                    error_log("UNYCOP SYNC DEBUG: ✅ Cambios confirmados para {$sku} - Stock y precio actualizados correctamente");
+                                    $products_updated++;
+                                    update_post_meta($product_id, '_unycop_last_sync', current_time('mysql'));
+                                    $changes_details[] = $change_info;
+                                } else {
+                                    error_log("UNYCOP SYNC DEBUG: ❌ ERROR - Cambios NO se aplicaron para {$sku} - Stock esperado: {$csv_stock}, actual: {$new_stock}, Precio esperado: {$csv_price}, actual: {$new_price}");
+                                    $errors++;
+                                }
                             } else {
-                                error_log("UNYCOP SYNC DEBUG: ❌ ERROR - Cambios NO se aplicaron para {$sku} - Stock esperado: {$csv_stock}, actual: {$new_stock}, Precio esperado: {$csv_price}, actual: {$new_price}");
+                                error_log("UNYCOP SYNC ERROR: No se pudo cargar el producto actualizado {$sku} (ID: {$product_id})");
+                                $errors++;
                             }
                         } else {
-                            error_log("UNYCOP SYNC ERROR: No se pudo guardar el producto {$sku} (ID: {$product_id})");
+                            error_log("UNYCOP SYNC ERROR: Fallo en actualización directa de BD para {$sku} (ID: {$product_id})");
                             $errors++;
                         }
                     } else {
@@ -3749,11 +3782,43 @@ function sync_stock_and_price_only() {
     // Limpiar caché de WooCommerce después de las actualizaciones
     if ($products_updated > 0) {
         wc_delete_product_transients();
-        error_log("UNYCOP SYNC: Caché de WooCommerce limpiada después de {$products_updated} actualizaciones");
+        wp_cache_flush(); // Limpiar toda la caché de WordPress
+        error_log("UNYCOP SYNC: Caché de WooCommerce y WordPress limpiada después de {$products_updated} actualizaciones");
     }
     
     error_log("UNYCOP SYNC RÁPIDO COMPLETADO: {$products_updated} productos con cambios, {$stock_changes} cambios de stock, {$price_changes} cambios de precio, {$errors} errores, {$processed} productos procesados de {$total_woo_products} totales en WooCommerce");
     error_log("UNYCOP SYNC RESUMEN: {$products_not_loaded} productos no se pudieron cargar, {$products_without_sku} productos sin SKU, {$processed} productos procesados exitosamente");
+    
+    // Verificación final de persistencia
+    if ($products_updated > 0) {
+        error_log("UNYCOP SYNC: ===== VERIFICACIÓN FINAL DE PERSISTENCIA =====");
+        $verification_errors = 0;
+        foreach ($changes_details as $change) {
+            $product_id = $change['product_id'];
+            $sku = $change['sku'];
+            $expected_stock = $change['new_stock'];
+            $expected_price = $change['new_price'];
+            
+            // Recargar el producto desde la base de datos
+            $final_product = wc_get_product($product_id);
+            if ($final_product) {
+                $final_stock = $final_product->get_stock_quantity();
+                $final_price = $final_product->get_regular_price();
+                
+                if ($final_stock == $expected_stock && $final_price == $expected_price) {
+                    error_log("UNYCOP SYNC VERIFICACIÓN: ✅ {$sku} - Cambios persistentes confirmados");
+                } else {
+                    error_log("UNYCOP SYNC VERIFICACIÓN: ❌ {$sku} - Cambios NO persistentes - Stock esperado: {$expected_stock}, actual: {$final_stock}, Precio esperado: {$expected_price}, actual: {$final_price}");
+                    $verification_errors++;
+                }
+            } else {
+                error_log("UNYCOP SYNC VERIFICACIÓN: ❌ {$sku} - No se pudo cargar para verificación");
+                $verification_errors++;
+            }
+        }
+        error_log("UNYCOP SYNC: Verificación final completada - {$verification_errors} errores de persistencia");
+    }
+    
     error_log('UNYCOP SYNC: ===== FIN ACTUALIZACIÓN RÁPIDA =====');
     
     return array(
