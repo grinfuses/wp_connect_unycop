@@ -3,6 +3,8 @@
 # 📊 Archivos CSV con datos de la farmacia
 stocklocal.csv
 orders.csv
+back_stocklocal.csv
+backup_productos_unycop_*.csv
 # Excluir archivos CSV reales pero permitir archivos de ejemplo
 *.csv
 !*.example.csv
