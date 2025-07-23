@@ -753,29 +753,43 @@ function unycop_update_stock_ajax_handler() {
 
 // Handler AJAX para actualización rápida
 function unycop_quick_update_ajax_handler() {
+    // Log para debugging
+    error_log('UNYCOP AJAX: Iniciando actualización rápida');
+    
     // Verificar nonce
     if (!wp_verify_nonce($_POST['nonce'], 'unycop_quick_update_nonce')) {
-        wp_die('Error de seguridad');
+        error_log('UNYCOP AJAX: Error de nonce');
+        wp_send_json_error('Error de seguridad - nonce inválido');
+        return;
     }
     
     // Verificar permisos
     if (!current_user_can('manage_options')) {
-        wp_die('Permisos insuficientes');
+        error_log('UNYCOP AJAX: Error de permisos');
+        wp_send_json_error('Permisos insuficientes');
+        return;
     }
     
     try {
+        error_log('UNYCOP AJAX: Ejecutando sync_stock_and_price_only');
         $start_time = microtime(true);
-        $products_updated = sync_stock_and_price_only();
+        $result = sync_stock_and_price_only();
         $end_time = microtime(true);
         $execution_time = round($end_time - $start_time, 2);
         
+        error_log('UNYCOP AJAX: Actualización rápida completada - ' . json_encode($result));
+        
         wp_send_json_success(array(
-            'products_updated' => $products_updated,
+            'products_updated' => $result['products_updated'],
+            'stock_changes' => $result['stock_changes'],
+            'price_changes' => $result['price_changes'],
+            'errors' => $result['errors'],
             'execution_time' => $execution_time . ' segundos',
             'timestamp' => current_time('mysql')
         ));
     } catch (Exception $e) {
-        wp_send_json_error($e->getMessage());
+        error_log('UNYCOP AJAX ERROR: ' . $e->getMessage());
+        wp_send_json_error('Error en actualización rápida: ' . $e->getMessage());
     }
 }
 
