@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce Unycop Connector
 Description: Sincroniza WooCommerce con Unycop Win importando el stock de productos desde un archivo CSV y exportando los pedidos completados a orders.csv. Incluye panel de configuración y endpoints REST API seguros para una integración eficiente en farmacia.
-Version: 3.6
+Version: 4.0
 Author: jnaranjo - illoque.com
 */
 
@@ -233,7 +233,196 @@ function find_stocklocal_csv() {
 }
 
 // Función para generar el archivo orders.csv y guardarlo en local
-function generate_orders_csv() {
+function generate_orders_csv($order_id = null) {
+    // Evitar generar múltiples veces en la misma petición
+    static $is_generating = false;
+    if ($is_generating) {
+        return;
+    }
+    $is_generating = true;
+    
+    $custom_path = get_option('unycop_csv_path', '');
+    if ($custom_path) {
+        $csv_path = rtrim($custom_path, '/');
+    } else {
+        $upload_dir = wp_upload_dir();
+        $csv_path = $upload_dir['basedir'] . '/unycop';
+    }
+    
+    // Asegurar que el directorio existe
+    if (!is_dir($csv_path)) {
+        wp_mkdir_p($csv_path);
+    }
+    
+    $csv_file = $csv_path . '/orders.csv';
+    
+    // Log para debugging
+    $log_message = 'UNYCOP ORDERS: Generando orders.csv';
+    if ($order_id) {
+        $log_message .= ' (triggered by order #' . $order_id . ')';
+    }
+    error_log($log_message);
+    
+    $handle = fopen($csv_file, 'w');
+
+    // Encabezados del CSV exactamente como en la documentación
+    fputcsv($handle, array(
+        'Referencia_del_pedido',
+        'id_del_pedido',
+        'Fecha',
+        'Id_cliente_web',
+        'Nombre_cliente',
+        'Apellidos_cliente',
+        'Email_cliente',
+        'Telefono_cliente',
+        'DNI',
+        'direccion',
+        'CP',
+        'Ciudad',
+        'Provincia',
+        'Codigo_nacional_del_producto',
+        'Cantidad',
+        'PVP_web',
+        'Total_Productos',
+        'Total_pago',
+        'Gastos_de_envio',
+        'Precio_unitario_sin_IVA',
+        'Precio_unitario_con_IVA'
+    ), ';', '"', '\\');
+
+    // Obtener pedidos completados de WooCommerce
+    $args = array(
+        'status' => 'completed',
+        'limit' => -1,
+        'orderby' => 'date',
+        'order' => 'ASC'
+    );
+    $orders = wc_get_orders($args);
+
+    foreach ($orders as $order) {
+        $customer_id = $order->get_customer_id();
+        $billing_address = $order->get_address('billing');
+        $shipping_cost = $order->get_shipping_total();
+        $total_paid = $order->get_total();
+        
+        // Calcular total de productos (subtotal + IVA)
+        $subtotal = $order->get_subtotal();
+        $total_tax = $order->get_total_tax();
+        $total_products = $subtotal + $total_tax;
+
+        foreach ($order->get_items() as $item) {
+            $product = $item->get_product();
+            if (!$product) continue;
+            
+            // Obtener SKU del producto
+            $sku = $product->get_sku();
+            if (empty($sku)) continue;
+            
+            // Código nacional: primeros 6 dígitos del SKU
+            $national_code = substr($sku, 0, 6);
+            
+            // Cantidad del item
+            $quantity = $item->get_quantity();
+            
+            // Precios unitarios
+            $unit_price_excl_tax = $item->get_subtotal() / $quantity; // Sin IVA
+            $unit_price_incl_tax = $item->get_total() / $quantity;    // Con IVA
+            
+            // PVP web: precio unitario sin IVA
+            $pvp_web = $unit_price_excl_tax;
+            
+            // Formatear la fecha del pedido (formato español)
+            $order_date = $order->get_date_created()->date('d/m/Y H:i:s');
+            
+            // Referencia del pedido: usar meta o generar automáticamente
+            $reference = $order->get_meta('observaciones_unycop', true);
+            if (empty($reference)) {
+                $reference = 'ORD-' . $order->get_id();
+            }
+
+            // Crear línea de datos en el orden exacto de la documentación
+            $data = array(
+                $reference,                                    // Referencia_del_pedido
+                $order->get_id(),                              // id_del_pedido
+                $order_date,                                   // Fecha
+                $customer_id,                                  // Id_cliente_web
+                $billing_address['first_name'] ?: 'Sin nombre', // Nombre_cliente
+                $billing_address['last_name'] ?: 'Sin apellidos', // Apellidos_cliente
+                $billing_address['email'] ?: 'sin@email.com',  // Email_cliente
+                $billing_address['phone'] ?: 'Sin teléfono',   // Telefono_cliente
+                $billing_address['dni'] ?: 'Sin DNI',          // DNI
+                $billing_address['address_1'] ?: 'Sin dirección', // direccion
+                $billing_address['postcode'] ?: 'Sin CP',      // CP
+                $billing_address['city'] ?: 'Sin ciudad',      // Ciudad
+                $billing_address['state'] ?: 'Sin provincia',  // Provincia
+                $national_code,                                // Codigo_nacional_del_producto
+                $quantity,                                     // Cantidad
+                number_format($pvp_web, 2, '.', ''),           // PVP_web
+                number_format($total_products, 2, '.', ''),    // Total_Productos
+                number_format($total_paid, 2, '.', ''),        // Total_pago
+                number_format($shipping_cost, 2, '.', ''),     // Gastos_de_envio
+                number_format($unit_price_excl_tax, 2, '.', ''), // Precio_unitario_sin_IVA
+                number_format($unit_price_incl_tax, 2, '.', '')  // Precio_unitario_con_IVA
+            );
+
+            // Escribir la línea de datos en el CSV
+            fputcsv($handle, $data, ';', '"', '\\');
+        }
+    }
+
+    fclose($handle);
+    
+    // Log para debugging
+    error_log('UNYCOP ORDERS: Archivo orders.csv generado en: ' . $csv_file . ' con ' . $total_orders . ' pedidos');
+    
+    // Resetear la variable estática para permitir futuras generaciones
+    $is_generating = false;
+}
+
+// Hook para generar orders.csv tras cada venta completada
+add_action('woocommerce_order_status_completed', 'generate_orders_csv');
+
+// Hook para generar orders.csv cuando se crea un pedido (cualquier estado)
+add_action('woocommerce_new_order', 'generate_orders_csv');
+
+// Hook para generar orders.csv cuando cambia el estado de un pedido
+add_action('woocommerce_order_status_changed', 'generate_orders_csv');
+
+// =====================
+// HANDLERS AJAX PARA MEJORAS DE PEDIDOS
+// =====================
+
+// Handler para obtener estadísticas de pedidos
+add_action('wp_ajax_unycop_get_orders_stats', 'unycop_get_orders_stats_handler');
+function unycop_get_orders_stats_handler() {
+    if (!wp_verify_nonce($_POST['nonce'], 'unycop_orders_nonce')) {
+        wp_send_json_error('Error de seguridad');
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Permisos insuficientes');
+    }
+    
+    $date_from = isset($_POST['date_from']) ? sanitize_text_field($_POST['date_from']) : null;
+    $date_to = isset($_POST['date_to']) ? sanitize_text_field($_POST['date_to']) : null;
+    
+    $stats = unycop_get_orders_statistics($date_from, $date_to);
+    wp_send_json_success($stats);
+}
+
+// Handler para generar CSV de pedidos con filtros
+add_action('wp_ajax_unycop_generate_orders_csv', 'unycop_generate_orders_csv_handler');
+function unycop_generate_orders_csv_handler() {
+    if (!wp_verify_nonce($_POST['nonce'], 'unycop_orders_nonce')) {
+        wp_send_json_error('Error de seguridad');
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Permisos insuficientes');
+    }
+    
+    // Generar el archivo orders.csv con todos los pedidos completados
+    generate_orders_csv();
+    
+    // Obtener información del archivo generado
     $custom_path = get_option('unycop_csv_path', '');
     if ($custom_path) {
         $csv_path = rtrim($custom_path, '/');
@@ -242,94 +431,52 @@ function generate_orders_csv() {
         $csv_path = $upload_dir['basedir'] . '/unycop';
     }
     $csv_file = $csv_path . '/orders.csv';
-    $handle = fopen($csv_file, 'w');
-
-    // Encabezados del CSV según el orden del manual de Unycop
-    fputcsv($handle, array(
-        'Referencia del pedido', // 1
-        'id del pedido',         // 2
-        'Fecha',                // 3
-        'Id cliente web',       // 4
-        'Nombre cliente',       // 5
-        'Apellidos cliente',    // 6
-        'Email cliente',        // 7
-        'Teléfono cliente',     // 8
-        'DNI',                  // 9
-        'dirección',            // 10
-        'CP',                   // 11
-        'Ciudad',               // 12
-        'Provincia',            // 13
-        'Código nacional del producto', // 14
-        'Cantidad',             // 15
-        'PVP web',              // 16
-        'Total Productos',      // 17
-        'Total pago',           // 18
-        'Gastos de envío',      // 19
-        'Precio unitario sin IVA', // 20
-        'Precio unitario con IVA'  // 21
-    ), ';');
-
-    // Obtener pedidos completados de WooCommerce
-    $args = array(
-        'status' => 'completed',
-        'limit' => -1
-    );
-    $orders = wc_get_orders($args);
-
-    foreach ($orders as $order) {
-        $customer_id = $order->get_customer_id();
-        $customer = new WC_Customer($customer_id);
-        $billing_address = $order->get_address('billing');
-        $shipping_cost = $order->get_shipping_total();
-        $total_paid = $order->get_total();
-        $total_products = $order->get_subtotal() + $order->get_total_tax(); // Total productos con IVA
-
-        foreach ($order->get_items() as $item) {
-            $product = $item->get_product();
-            $unit_price_excl_tax = $item->get_subtotal() / $item->get_quantity(); // Precio sin IVA
-            $unit_price_incl_tax = $item->get_total() / $item->get_quantity(); // Precio con IVA
-            $national_code = substr($product->get_sku(), 0, 6); // 6 primeras cifras del SKU
-            $pvp_web = $unit_price_excl_tax; // Precio unitario sin IVA y sin descuento
-
-            // Formatear la fecha del pedido
-            $order_date = $order->get_date_created()->date('d/m/Y H:i:s');
-
-            // Crear una línea de datos en el CSV en el orden correcto
-            $data = array(
-                $order->get_meta('observaciones_unycop', true), // 1 Referencia del pedido
-                $order->get_id(),                               // 2 id del pedido
-                $order_date,                                    // 3 Fecha
-                $customer_id,                                   // 4 Id cliente web
-                $billing_address['first_name'],                 // 5 Nombre cliente
-                $billing_address['last_name'],                  // 6 Apellidos cliente
-                $billing_address['email'],                      // 7 Email cliente
-                $billing_address['phone'],                      // 8 Teléfono cliente
-                $billing_address['dni'],                        // 9 DNI
-                $billing_address['address_1'],                  // 10 dirección
-                $billing_address['postcode'],                   // 11 CP
-                $billing_address['city'],                       // 12 Ciudad
-                $billing_address['state'],                      // 13 Provincia
-                $national_code,                                 // 14 Código nacional del producto
-                $item->get_quantity(),                          // 15 Cantidad
-                $pvp_web,                                       // 16 PVP web
-                $total_products,                                // 17 Total Productos (con IVA)
-                $total_paid,                                    // 18 Total pago
-                $shipping_cost,                                 // 19 Gastos de envío
-                $unit_price_excl_tax,                           // 20 Precio unitario sin IVA
-                $unit_price_incl_tax                            // 21 Precio unitario con IVA
-            );
-
-            // Escribir la línea de datos en el CSV
-            fputcsv($handle, $data, ';');
-        }
+    
+    if (file_exists($csv_file)) {
+        $file_size = filesize($csv_file);
+        $file_date = date('d/m/Y H:i:s', filemtime($csv_file));
+        $lines = count(file($csv_file));
+        $total_orders = $lines - 1; // Restar la línea de encabezados
+        
+        $result = array(
+            'file_path' => $csv_file,
+            'file_name' => basename($csv_file),
+            'total_orders' => $total_orders,
+            'total_items' => $total_orders, // Aproximación
+            'file_size' => $file_size,
+            'file_date' => $file_date,
+            'date_from' => null,
+            'date_to' => null,
+            'status' => 'completed'
+        );
+        
+        wp_send_json_success($result);
+    } else {
+        wp_send_json_error('No se pudo generar el archivo orders.csv');
     }
-
-    fclose($handle);
-    // El archivo se almacena en la ubicación especificada
 }
 
-// Hook para generar orders.csv tras cada venta completada
-add_action('woocommerce_order_status_completed', 'generate_orders_csv');
+// Handler para obtener lista de pedidos
+add_action('wp_ajax_unycop_get_orders_list', 'unycop_get_orders_list_handler');
+function unycop_get_orders_list_handler() {
+    if (!wp_verify_nonce($_POST['nonce'], 'unycop_orders_nonce')) {
+        wp_send_json_error('Error de seguridad');
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Permisos insuficientes');
+    }
+    
+    $page = isset($_POST['page']) ? intval($_POST['page']) : 1;
+    $per_page = isset($_POST['per_page']) ? intval($_POST['per_page']) : 20;
+    $filters = array(
+        'status' => isset($_POST['status']) ? sanitize_text_field($_POST['status']) : 'completed',
+        'date_from' => isset($_POST['date_from']) ? sanitize_text_field($_POST['date_from']) : '',
+        'date_to' => isset($_POST['date_to']) ? sanitize_text_field($_POST['date_to']) : ''
+    );
+    
+    $result = unycop_get_orders_list($page, $per_page, $filters);
+    wp_send_json_success($result);
+}
 
 // =====================
 // ADMINISTRACIÓN PLUGIN
@@ -354,6 +501,16 @@ function unycop_connector_admin_menu() {
         'manage_options',
         'unycop-diagnostic',
         'unycop_diagnostic_page'
+    );
+    
+    // Agregar subpágina de gestión de pedidos
+    add_submenu_page(
+        'options-general.php',
+        'UNYCOP Gestión de Pedidos',
+        '📦 UNYCOP Pedidos',
+        'manage_options',
+        'unycop-orders',
+        'unycop_orders_management_page'
     );
 }
 
@@ -768,6 +925,133 @@ function unycop_admin_scripts($hook) {
                     },
                     error: function() {
                         $("#sync-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión al reactivar cron</p></div>");
+                    },
+                    complete: function() {
+                        // Restaurar botón
+                        $btn.prop("disabled", false).text(originalText);
+                    }
+                });
+            });
+            
+            // Botón para generar orders.csv
+            $("#generate-orders-csv-btn").on("click", function(e) {
+                e.preventDefault();
+                
+                var $btn = $(this);
+                var originalText = $btn.text();
+                
+                // Deshabilitar botón y mostrar loading
+                $btn.prop("disabled", true).text("Generando...");
+                
+                // Mostrar mensaje de estado
+                $("#orders-status").html("<div class=\'notice notice-info inline\'><p>Generando archivo orders.csv...</p></div>");
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: "POST",
+                    data: {
+                        action: "unycop_generate_orders_csv",
+                        nonce: "' . wp_create_nonce('unycop_orders_nonce') . '"
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            var data = response.data;
+                            var statusHtml = "<div class=\'notice notice-success inline\'><p>";
+                            statusHtml += "✅ <strong>Archivo orders.csv generado correctamente</strong><br>";
+                            statusHtml += "📄 Archivo: " + data.file_name + "<br>";
+                            statusHtml += "📦 Pedidos procesados: " + data.total_orders + "<br>";
+                            statusHtml += "🛍️ Artículos totales: " + data.total_items + "<br>";
+                            statusHtml += "📅 Período: " + (data.date_from || "Todos") + " - " + (data.date_to || "Hoy") + "<br>";
+                            statusHtml += "📁 Ubicación: " + data.file_path;
+                            statusHtml += "</p></div>";
+                            
+                            $("#orders-status").html(statusHtml);
+                            
+                            // Recargar la página para mostrar la información actualizada
+                            setTimeout(function() {
+                                location.reload();
+                            }, 2000);
+                        } else {
+                            $("#orders-status").html("<div class=\'notice notice-error inline\'><p>❌ Error: " + response.data + "</p></div>");
+                        }
+                    },
+                    error: function() {
+                        $("#orders-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión al generar orders.csv</p></div>");
+                    },
+                    complete: function() {
+                        // Restaurar botón
+                        $btn.prop("disabled", false).text(originalText);
+                    }
+                });
+            });
+            
+            // Botón para ver estadísticas de pedidos
+            $("#view-orders-stats-btn").on("click", function(e) {
+                e.preventDefault();
+                
+                var $btn = $(this);
+                var originalText = $btn.text();
+                
+                // Deshabilitar botón y mostrar loading
+                $btn.prop("disabled", true).text("Cargando...");
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: "POST",
+                    data: {
+                        action: "unycop_get_orders_stats",
+                        nonce: "' . wp_create_nonce('unycop_orders_nonce') . '"
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            var stats = response.data;
+                            var statsHtml = "<div class=\'card\' style=\'max-width: 800px; margin-top: 20px;\'>";
+                            statsHtml += "<h3>📊 Estadísticas de Pedidos</h3>";
+                            statsHtml += "<div style=\'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;\'>";
+                            statsHtml += "<div style=\'background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center;\'>";
+                            statsHtml += "<div style=\'font-size: 2em; font-weight: bold; color: #0073aa;\'>" + stats.total_orders + "</div>";
+                            statsHtml += "<div style=\'color: #666;\'>Total Pedidos</div>";
+                            statsHtml += "</div>";
+                            statsHtml += "<div style=\'background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center;\'>";
+                            statsHtml += "<div style=\'font-size: 2em; font-weight: bold; color: #0073aa;\'>" + stats.total_revenue.toFixed(2) + "€</div>";
+                            statsHtml += "<div style=\'color: #666;\'>Ingresos Totales</div>";
+                            statsHtml += "</div>";
+                            statsHtml += "<div style=\'background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center;\'>";
+                            statsHtml += "<div style=\'font-size: 2em; font-weight: bold; color: #0073aa;\'>" + stats.average_order_value.toFixed(2) + "€</div>";
+                            statsHtml += "<div style=\'color: #666;\'>Ticket Promedio</div>";
+                            statsHtml += "</div>";
+                            statsHtml += "<div style=\'background: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center;\'>";
+                            statsHtml += "<div style=\'font-size: 2em; font-weight: bold; color: #0073aa;\'>" + stats.total_items + "</div>";
+                            statsHtml += "<div style=\'color: #666;\'>Artículos Vendidos</div>";
+                            statsHtml += "</div>";
+                            statsHtml += "</div>";
+                            
+                            // Mostrar productos más vendidos
+                            if (Object.keys(stats.top_products).length > 0) {
+                                statsHtml += "<h4>🏆 Productos Más Vendidos</h4>";
+                                statsHtml += "<table class=\'wp-list-table widefat fixed striped\'>";
+                                statsHtml += "<thead><tr><th>Producto</th><th>Cantidad</th><th>Ingresos</th></tr></thead><tbody>";
+                                
+                                Object.values(stats.top_products).slice(0, 10).forEach(function(product) {
+                                    statsHtml += "<tr>";
+                                    statsHtml += "<td>" + product.name + "</td>";
+                                    statsHtml += "<td>" + product.quantity + "</td>";
+                                    statsHtml += "<td>" + product.revenue.toFixed(2) + "€</td>";
+                                    statsHtml += "</tr>";
+                                });
+                                
+                                statsHtml += "</tbody></table>";
+                            }
+                            
+                            statsHtml += "</div>";
+                            
+                            $("#orders-stats").html(statsHtml).show();
+                        } else {
+                            $("#orders-status").html("<div class=\'notice notice-error inline\'><p>❌ Error: " + response.data + "</p></div>");
+                        }
+                    },
+                    error: function() {
+                        $("#orders-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión al cargar estadísticas</p></div>");
                     },
                     complete: function() {
                         // Restaurar botón
@@ -1642,6 +1926,82 @@ function unycop_connector_settings_page() {
             ?>
         </div>
         
+        <!-- Sección de gestión de pedidos -->
+        <div class="card" style="max-width: 800px; margin-bottom: 20px;">
+            <h2>📦 Gestión de Pedidos</h2>
+            <p>El archivo <code>orders.csv</code> se genera automáticamente cada vez que se crea o completa un pedido, y también manualmente desde este panel.</p>
+            
+            <button id="generate-orders-csv-btn" class="button button-primary" style="margin-bottom: 10px;">
+                📄 Generar orders.csv (Manual)
+            </button>
+            
+            <button id="view-orders-stats-btn" class="button button-secondary" style="margin-bottom: 10px; margin-left: 10px;">
+                📊 Ver Estadísticas de Pedidos
+            </button>
+            
+            <div id="orders-status"></div>
+            <div id="orders-stats" style="display: none;"></div>
+            
+            <!-- Información sobre generación automática -->
+            <div style="background: #f0f6fc; border-left: 4px solid #0073aa; padding: 12px; margin: 15px 0;">
+                <h4 style="margin-top: 0;">🔄 Generación Automática</h4>
+                <p style="margin-bottom: 0;">El archivo <code>orders.csv</code> se actualiza automáticamente en estos casos:</p>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>✅ Cuando se crea un nuevo pedido</li>
+                    <li>✅ Cuando se completa un pedido</li>
+                    <li>✅ Cuando cambia el estado de un pedido</li>
+                </ul>
+            </div>
+            
+            <!-- Información del archivo orders.csv -->
+            <hr style="margin: 20px 0;">
+            <h3>Información del archivo orders.csv</h3>
+            <?php
+            $orders_csv_file = $csv_path . '/orders.csv';
+            
+            if (file_exists($orders_csv_file)) {
+                $file_size = filesize($orders_csv_file);
+                $file_date = date('d/m/Y H:i:s', filemtime($orders_csv_file));
+                $lines = count(file($orders_csv_file));
+                
+                echo '<div class="notice notice-info inline"><p>';
+                echo '<strong>📄 Archivo orders.csv encontrado:</strong><br>';
+                echo '<strong>Ruta:</strong> ' . esc_html($orders_csv_file) . '<br>';
+                echo '<strong>Tamaño:</strong> ' . number_format($file_size) . ' bytes<br>';
+                echo '<strong>Líneas:</strong> ' . $lines . ' (incluyendo encabezados)<br>';
+                echo '<strong>Última modificación:</strong> ' . $file_date . '<br>';
+                echo '<strong>📋 Pedidos en el archivo:</strong> ' . ($lines - 1) . ' pedidos';
+                echo '</p></div>';
+                
+                // Mostrar vista previa del archivo
+                if ($lines > 1) {
+                    echo '<div class="card" style="max-width: 800px; margin-top: 15px;">';
+                    echo '<h4>👁️ Vista previa del archivo orders.csv</h4>';
+                    echo '<div style="max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; font-family: monospace; font-size: 12px;">';
+                    
+                    $handle = fopen($orders_csv_file, 'r');
+                    $line_count = 0;
+                    while (($line = fgets($handle)) !== false && $line_count < 5) {
+                        echo htmlspecialchars($line) . '<br>';
+                        $line_count++;
+                    }
+                    fclose($handle);
+                    
+                    if ($lines > 5) {
+                        echo '<em>... y ' . ($lines - 5) . ' líneas más</em>';
+                    }
+                    echo '</div></div>';
+                }
+            } else {
+                echo '<div class="notice notice-warning inline"><p>';
+                echo '<strong>📄 Archivo orders.csv no encontrado:</strong><br>';
+                echo '<strong>Ruta esperada:</strong> ' . esc_html($orders_csv_file) . '<br>';
+                echo 'Haz clic en "Generar orders.csv" para crear el archivo con los pedidos completados.';
+                echo '</p></div>';
+            }
+            ?>
+        </div>
+        
         <!-- Sección de información sobre referencias -->
         <div class="card" style="max-width: 800px; margin-bottom: 20px;">
             <h2>📋 Información sobre Referencias y EAN13</h2>
@@ -1885,6 +2245,41 @@ function unycop_connector_settings_page() {
 }
 
 // =====================
+// REGISTRO DE ENDPOINTS API REST
+// =====================
+
+// Registrar endpoints de la API REST
+add_action('rest_api_init', function() {
+    // Endpoint para descargar orders.csv
+    register_rest_route('unycop/v1', '/orders', array(
+        'methods' => 'GET',
+        'callback' => 'unycop_api_get_orders_csv',
+        'permission_callback' => '__return_true'
+    ));
+    
+    // Endpoint para forzar actualización de stock
+    register_rest_route('unycop/v1', '/stock-update', array(
+        'methods' => 'POST',
+        'callback' => 'unycop_api_stock_update',
+        'permission_callback' => '__return_true'
+    ));
+    
+    // Endpoint para actualización rápida
+    register_rest_route('unycop/v1', '/quick-update', array(
+        'methods' => 'POST',
+        'callback' => 'unycop_api_quick_update',
+        'permission_callback' => '__return_true'
+    ));
+    
+    // Endpoint para estadísticas de pedidos
+    register_rest_route('unycop/v1', '/orders-stats', array(
+        'methods' => 'GET',
+        'callback' => 'unycop_api_get_orders_stats',
+        'permission_callback' => '__return_true'
+    ));
+});
+
+// =====================
 // ENDPOINTS REST API PARA UNYCOP WIN
 // =====================
 add_action('rest_api_init', function () {
@@ -1991,6 +2386,24 @@ function unycop_api_quick_update($request) {
         'products_updated' => $products_updated,
         'execution_time' => $execution_time . ' segundos',
         'type' => 'quick_update'
+    ], 200);
+}
+
+// Endpoint para obtener estadísticas de pedidos
+function unycop_api_get_orders_stats($request) {
+    if (!unycop_api_check_token($request)) {
+        return new WP_REST_Response(['error' => 'Token inválido'], 403);
+    }
+    
+    $date_from = $request->get_param('date_from');
+    $date_to = $request->get_param('date_to');
+    
+    $stats = unycop_get_orders_statistics($date_from, $date_to);
+    
+    return new WP_REST_Response([
+        'success' => true,
+        'data' => $stats,
+        'timestamp' => current_time('mysql')
     ], 200);
 }
 
@@ -4074,4 +4487,611 @@ function unycop_diagnostic_page() {
     }
     
     echo '</div>';
+}
+
+// =====================
+// MEJORAS EN EL SISTEMA DE PEDIDOS
+// =====================
+
+// Función para obtener estadísticas de pedidos
+function unycop_get_orders_statistics($date_from = null, $date_to = null) {
+    $args = array(
+        'status' => 'completed',
+        'limit' => -1
+    );
+    
+    // Añadir filtros de fecha si se especifican
+    if ($date_from) {
+        $args['date_created'] = '>=' . $date_from;
+    }
+    if ($date_to) {
+        $args['date_created'] = (isset($args['date_created']) ? $args['date_created'] . ' AND ' : '') . '<=' . $date_to;
+    }
+    
+    $orders = wc_get_orders($args);
+    
+    $stats = array(
+        'total_orders' => 0,
+        'total_revenue' => 0,
+        'total_items' => 0,
+        'average_order_value' => 0,
+        'shipping_revenue' => 0,
+        'tax_revenue' => 0,
+        'top_products' => array(),
+        'orders_by_date' => array(),
+        'recent_orders' => array()
+    );
+    
+    $product_sales = array();
+    
+    foreach ($orders as $order) {
+        $stats['total_orders']++;
+        $stats['total_revenue'] += $order->get_total();
+        $stats['shipping_revenue'] += $order->get_shipping_total();
+        $stats['tax_revenue'] += $order->get_total_tax();
+        
+        $order_date = $order->get_date_created()->date('Y-m-d');
+        if (!isset($stats['orders_by_date'][$order_date])) {
+            $stats['orders_by_date'][$order_date] = array('count' => 0, 'revenue' => 0);
+        }
+        $stats['orders_by_date'][$order_date]['count']++;
+        $stats['orders_by_date'][$order_date]['revenue'] += $order->get_total();
+        
+        // Añadir a pedidos recientes (últimos 10)
+        if (count($stats['recent_orders']) < 10) {
+            $stats['recent_orders'][] = array(
+                'id' => $order->get_id(),
+                'date' => $order->get_date_created()->date('d/m/Y H:i'),
+                'total' => $order->get_total(),
+                'customer' => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
+                'items_count' => $order->get_item_count()
+            );
+        }
+        
+        foreach ($order->get_items() as $item) {
+            $stats['total_items'] += $item->get_quantity();
+            $product_id = $item->get_product_id();
+            $product_name = $item->get_name();
+            
+            if (!isset($product_sales[$product_id])) {
+                $product_sales[$product_id] = array(
+                    'name' => $product_name,
+                    'quantity' => 0,
+                    'revenue' => 0
+                );
+            }
+            $product_sales[$product_id]['quantity'] += $item->get_quantity();
+            $product_sales[$product_id]['revenue'] += $item->get_total();
+        }
+    }
+    
+    // Calcular promedio por pedido
+    if ($stats['total_orders'] > 0) {
+        $stats['average_order_value'] = round($stats['total_revenue'] / $stats['total_orders'], 2);
+    }
+    
+    // Obtener productos más vendidos
+    uasort($product_sales, function($a, $b) {
+        return $b['quantity'] - $a['quantity'];
+    });
+    $stats['top_products'] = array_slice($product_sales, 0, 10, true);
+    
+    return $stats;
+}
+
+// Función para generar orders.csv con filtros
+function generate_orders_csv_filtered($date_from = null, $date_to = null, $status = 'completed') {
+    $custom_path = get_option('unycop_csv_path', '');
+    if ($custom_path) {
+        $csv_path = rtrim($custom_path, '/');
+    } else {
+        $upload_dir = wp_upload_dir();
+        $csv_path = $upload_dir['basedir'] . '/unycop';
+    }
+    
+    // Crear nombre de archivo con timestamp
+    $timestamp = current_time('Y-m-d_H-i-s');
+    $csv_file = $csv_path . '/orders_' . $timestamp . '.csv';
+    
+    // Asegurar que el directorio existe
+    if (!is_dir($csv_path)) {
+        wp_mkdir_p($csv_path);
+    }
+    
+    $handle = fopen($csv_file, 'w');
+
+    // Encabezados del CSV exactamente como en la documentación
+    fputcsv($handle, array(
+        'Referencia_del_pedido',
+        'id_del_pedido',
+        'Fecha',
+        'Id_cliente_web',
+        'Nombre_cliente',
+        'Apellidos_cliente',
+        'Email_cliente',
+        'Telefono_cliente',
+        'DNI',
+        'direccion',
+        'CP',
+        'Ciudad',
+        'Provincia',
+        'Codigo_nacional_del_producto',
+        'Cantidad',
+        'PVP_web',
+        'Total_Productos',
+        'Total_pago',
+        'Gastos_de_envio',
+        'Precio_unitario_sin_IVA',
+        'Precio_unitario_con_IVA'
+    ), ';', '"', '\\');
+
+    // Obtener pedidos con filtros
+    $args = array(
+        'status' => $status,
+        'limit' => -1
+    );
+    
+    if ($date_from) {
+        $args['date_created'] = '>=' . $date_from;
+    }
+    if ($date_to) {
+        $args['date_created'] = (isset($args['date_created']) ? $args['date_created'] . ' AND ' : '') . '<=' . $date_to;
+    }
+    
+    $orders = wc_get_orders($args);
+    $total_orders = 0;
+    $total_items = 0;
+
+    foreach ($orders as $order) {
+        $customer_id = $order->get_customer_id();
+        $customer = new WC_Customer($customer_id);
+        $billing_address = $order->get_address('billing');
+        $shipping_cost = $order->get_shipping_total();
+        $total_paid = $order->get_total();
+        $total_products = $order->get_subtotal() + $order->get_total_tax();
+
+        foreach ($order->get_items() as $item) {
+            $product = $item->get_product();
+            if (!$product) continue;
+            
+            // Obtener SKU del producto
+            $sku = $product->get_sku();
+            if (empty($sku)) continue;
+            
+            // Código nacional: primeros 6 dígitos del SKU
+            $national_code = substr($sku, 0, 6);
+            
+            // Cantidad del item
+            $quantity = $item->get_quantity();
+            
+            // Precios unitarios
+            $unit_price_excl_tax = $item->get_subtotal() / $quantity; // Sin IVA
+            $unit_price_incl_tax = $item->get_total() / $quantity;    // Con IVA
+            
+            // PVP web: precio unitario sin IVA
+            $pvp_web = $unit_price_excl_tax;
+
+            // Formatear la fecha del pedido
+            $order_date = $order->get_date_created()->date('d/m/Y H:i:s');
+
+            // Referencia del pedido: usar meta o generar automáticamente
+            $reference = $order->get_meta('observaciones_unycop', true);
+            if (empty($reference)) {
+                $reference = 'ORD-' . $order->get_id();
+            }
+
+            // Crear línea de datos en el orden exacto de la documentación
+            $data = array(
+                $reference,                                    // Referencia_del_pedido
+                $order->get_id(),                              // id_del_pedido
+                $order_date,                                   // Fecha
+                $customer_id,                                  // Id_cliente_web
+                $billing_address['first_name'] ?: 'Sin nombre', // Nombre_cliente
+                $billing_address['last_name'] ?: 'Sin apellidos', // Apellidos_cliente
+                $billing_address['email'] ?: 'sin@email.com',  // Email_cliente
+                $billing_address['phone'] ?: 'Sin teléfono',   // Telefono_cliente
+                $billing_address['dni'] ?: 'Sin DNI',          // DNI
+                $billing_address['address_1'] ?: 'Sin dirección', // direccion
+                $billing_address['postcode'] ?: 'Sin CP',      // CP
+                $billing_address['city'] ?: 'Sin ciudad',      // Ciudad
+                $billing_address['state'] ?: 'Sin provincia',  // Provincia
+                $national_code,                                // Codigo_nacional_del_producto
+                $quantity,                                     // Cantidad
+                number_format($pvp_web, 2, '.', ''),           // PVP_web
+                number_format($total_products, 2, '.', ''),    // Total_Productos
+                number_format($total_paid, 2, '.', ''),        // Total_pago
+                number_format($shipping_cost, 2, '.', ''),     // Gastos_de_envio
+                number_format($unit_price_excl_tax, 2, '.', ''), // Precio_unitario_sin_IVA
+                number_format($unit_price_incl_tax, 2, '.', '')  // Precio_unitario_con_IVA
+            );
+
+            fputcsv($handle, $data, ';', '"', '\\');
+            $total_items++;
+        }
+        $total_orders++;
+    }
+
+    fclose($handle);
+    
+    return array(
+        'file_path' => $csv_file,
+        'file_name' => basename($csv_file),
+        'total_orders' => $total_orders,
+        'total_items' => $total_items,
+        'date_from' => $date_from,
+        'date_to' => $date_to,
+        'status' => $status
+    );
+}
+
+// Función para obtener lista de pedidos con paginación
+function unycop_get_orders_list($page = 1, $per_page = 20, $filters = array()) {
+    $args = array(
+        'status' => isset($filters['status']) ? $filters['status'] : 'completed',
+        'limit' => $per_page,
+        'offset' => ($page - 1) * $per_page,
+        'orderby' => 'date',
+        'order' => 'DESC'
+    );
+    
+    if (isset($filters['date_from']) && $filters['date_from']) {
+        $args['date_created'] = '>=' . $filters['date_from'];
+    }
+    if (isset($filters['date_to']) && $filters['date_to']) {
+        $args['date_created'] = (isset($args['date_created']) ? $args['date_created'] . ' AND ' : '') . '<=' . $filters['date_to'];
+    }
+    
+    $orders = wc_get_orders($args);
+    $total_orders = wc_get_orders(array_merge($args, array('limit' => -1, 'offset' => 0)));
+    $total_count = count($total_orders);
+    
+    $orders_data = array();
+    foreach ($orders as $order) {
+        $orders_data[] = array(
+            'id' => $order->get_id(),
+            'date' => $order->get_date_created()->date('d/m/Y H:i'),
+            'status' => $order->get_status(),
+            'total' => $order->get_total(),
+            'customer_name' => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
+            'customer_email' => $order->get_billing_email(),
+            'items_count' => $order->get_item_count(),
+            'payment_method' => $order->get_payment_method_title(),
+            'shipping_method' => $order->get_shipping_method()
+        );
+    }
+    
+    return array(
+        'orders' => $orders_data,
+        'total_count' => $total_count,
+        'total_pages' => ceil($total_count / $per_page),
+        'current_page' => $page,
+        'per_page' => $per_page
+    );
+}
+
+// =====================
+// PÁGINA DE GESTIÓN DE PEDIDOS
+// =====================
+
+function unycop_orders_management_page() {
+    // Verificar permisos
+    if (!current_user_can('manage_options')) {
+        wp_die('No tienes permisos para acceder a esta página.');
+    }
+    
+    // Obtener estadísticas iniciales
+    $stats = unycop_get_orders_statistics();
+    
+    ?>
+    <div class="wrap">
+        <h1>📦 Gestión de Pedidos UNYCOP</h1>
+        
+        <!-- Dashboard de estadísticas -->
+        <div class="unycop-dashboard">
+            <div class="unycop-stats-grid">
+                <div class="unycop-stat-card">
+                    <div class="stat-icon">📦</div>
+                    <div class="stat-content">
+                        <div class="stat-number"><?php echo number_format($stats['total_orders']); ?></div>
+                        <div class="stat-label">Total Pedidos</div>
+                    </div>
+                </div>
+                
+                <div class="unycop-stat-card">
+                    <div class="stat-icon">💰</div>
+                    <div class="stat-content">
+                        <div class="stat-number"><?php echo number_format($stats['total_revenue'], 2); ?>€</div>
+                        <div class="stat-label">Ingresos Totales</div>
+                    </div>
+                </div>
+                
+                <div class="unycop-stat-card">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-content">
+                        <div class="stat-number"><?php echo number_format($stats['average_order_value'], 2); ?>€</div>
+                        <div class="stat-label">Ticket Promedio</div>
+                    </div>
+                </div>
+                
+                <div class="unycop-stat-card">
+                    <div class="stat-icon">🛍️</div>
+                    <div class="stat-content">
+                        <div class="stat-number"><?php echo number_format($stats['total_items']); ?></div>
+                        <div class="stat-label">Artículos Vendidos</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Filtros y controles -->
+        <div class="unycop-controls">
+            <div class="unycop-filters">
+                <h3>🔍 Filtros de Exportación</h3>
+                <form id="unycop-orders-filters">
+                    <div class="filter-row">
+                        <div class="filter-group">
+                            <label for="date_from">Desde:</label>
+                            <input type="date" id="date_from" name="date_from">
+                        </div>
+                        <div class="filter-group">
+                            <label for="date_to">Hasta:</label>
+                            <input type="date" id="date_to" name="date_to">
+                        </div>
+                        <div class="filter-group">
+                            <label for="status">Estado:</label>
+                            <select id="status" name="status">
+                                <option value="completed">Completados</option>
+                                <option value="processing">En Proceso</option>
+                                <option value="on-hold">En Espera</option>
+                                <option value="all">Todos</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="filter-actions">
+                        <button type="button" id="generate-csv-btn" class="button button-primary">
+                            📄 Generar CSV
+                        </button>
+                        <button type="button" id="refresh-stats-btn" class="button button-secondary">
+                            🔄 Actualizar Estadísticas
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Lista de pedidos recientes -->
+        <div class="unycop-recent-orders">
+            <h3>📋 Pedidos Recientes</h3>
+            <div id="recent-orders-list">
+                <?php if (!empty($stats['recent_orders'])): ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Fecha</th>
+                                <th>Cliente</th>
+                                <th>Total</th>
+                                <th>Artículos</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($stats['recent_orders'] as $order): ?>
+                                <tr>
+                                    <td>#<?php echo $order['id']; ?></td>
+                                    <td><?php echo $order['date']; ?></td>
+                                    <td><?php echo esc_html($order['customer']); ?></td>
+                                    <td><?php echo number_format($order['total'], 2); ?>€</td>
+                                    <td><?php echo $order['items_count']; ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p>No hay pedidos recientes.</p>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <!-- Productos más vendidos -->
+        <div class="unycop-top-products">
+            <h3>🏆 Productos Más Vendidos</h3>
+            <div id="top-products-list">
+                <?php if (!empty($stats['top_products'])): ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>Producto</th>
+                                <th>Cantidad</th>
+                                <th>Ingresos</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($stats['top_products'] as $product_id => $product): ?>
+                                <tr>
+                                    <td><?php echo esc_html($product['name']); ?></td>
+                                    <td><?php echo $product['quantity']; ?></td>
+                                    <td><?php echo number_format($product['revenue'], 2); ?>€</td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p>No hay datos de productos vendidos.</p>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <!-- Estado de exportación -->
+        <div id="unycop-export-status"></div>
+    </div>
+    
+    <style>
+    .unycop-dashboard {
+        margin: 20px 0;
+    }
+    
+    .unycop-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    
+    .unycop-stat-card {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        display: flex;
+        align-items: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .stat-icon {
+        font-size: 2em;
+        margin-right: 15px;
+    }
+    
+    .stat-number {
+        font-size: 1.5em;
+        font-weight: bold;
+        color: #0073aa;
+    }
+    
+    .stat-label {
+        color: #666;
+        font-size: 0.9em;
+    }
+    
+    .unycop-controls {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+    }
+    
+    .unycop-filters h3 {
+        margin-top: 0;
+    }
+    
+    .filter-row {
+        display: flex;
+        gap: 20px;
+        align-items: end;
+        margin-bottom: 15px;
+    }
+    
+    .filter-group {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .filter-group label {
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+    
+    .filter-actions {
+        display: flex;
+        gap: 10px;
+    }
+    
+    .unycop-recent-orders,
+    .unycop-top-products {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+    }
+    
+    .unycop-recent-orders h3,
+    .unycop-top-products h3 {
+        margin-top: 0;
+    }
+    </style>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        // Generar CSV con filtros
+        $('#generate-csv-btn').on('click', function() {
+            var $btn = $(this);
+            var originalText = $btn.text();
+            
+            $btn.prop('disabled', true).text('Generando...');
+            
+            var data = {
+                action: 'unycop_generate_orders_csv',
+                nonce: '<?php echo wp_create_nonce('unycop_orders_nonce'); ?>',
+                date_from: $('#date_from').val(),
+                date_to: $('#date_to').val(),
+                status: $('#status').val()
+            };
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: data,
+                success: function(response) {
+                    if (response.success) {
+                        var result = response.data;
+                        var statusHtml = '<div class="notice notice-success inline"><p>';
+                        statusHtml += '✅ <strong>CSV generado correctamente</strong><br>';
+                        statusHtml += '📄 Archivo: ' + result.file_name + '<br>';
+                        statusHtml += '📦 Pedidos: ' + result.total_orders + '<br>';
+                        statusHtml += '🛍️ Artículos: ' + result.total_items + '<br>';
+                        statusHtml += '📅 Período: ' + (result.date_from || 'Inicio') + ' - ' + (result.date_to || 'Hoy');
+                        statusHtml += '</p></div>';
+                        
+                        $('#unycop-export-status').html(statusHtml);
+                    } else {
+                        $('#unycop-export-status').html('<div class="notice notice-error inline"><p>❌ Error: ' + response.data + '</p></div>');
+                    }
+                },
+                error: function() {
+                    $('#unycop-export-status').html('<div class="notice notice-error inline"><p>❌ Error de conexión</p></div>');
+                },
+                complete: function() {
+                    $btn.prop('disabled', false).text(originalText);
+                }
+            });
+        });
+        
+        // Actualizar estadísticas
+        $('#refresh-stats-btn').on('click', function() {
+            var $btn = $(this);
+            var originalText = $btn.text();
+            
+            $btn.prop('disabled', true).text('Actualizando...');
+            
+            var data = {
+                action: 'unycop_get_orders_stats',
+                nonce: '<?php echo wp_create_nonce('unycop_orders_nonce'); ?>',
+                date_from: $('#date_from').val(),
+                date_to: $('#date_to').val()
+            };
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: data,
+                success: function(response) {
+                    if (response.success) {
+                        location.reload(); // Recargar para mostrar nuevas estadísticas
+                    } else {
+                        alert('Error al actualizar estadísticas: ' + response.data);
+                    }
+                },
+                error: function() {
+                    alert('Error de conexión');
+                },
+                complete: function() {
+                    $btn.prop('disabled', false).text(originalText);
+                }
+            });
+        });
+    });
+    </script>
+    <?php
 }
