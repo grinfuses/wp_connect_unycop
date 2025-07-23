@@ -500,6 +500,62 @@ function unycop_admin_scripts($hook) {
                 $("#logs-history").html(logsHtml);
             }
             
+            // Botón de actualización rápida
+            $("#quick-update-btn").on("click", function(e) {
+                e.preventDefault();
+                
+                var $btn = $(this);
+                var originalText = $btn.text();
+                
+                // Deshabilitar botón y mostrar loading
+                $btn.prop("disabled", true).text("Actualizando...");
+                
+                // Mostrar mensaje de estado
+                $("#stock-update-status").html("<div class=\'notice notice-info inline\'><p>⚡ Ejecutando actualización rápida (solo stock y precio)...</p></div>");
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: "POST",
+                    data: {
+                        action: "unycop_quick_update_ajax",
+                        nonce: "' . wp_create_nonce('unycop_quick_update_nonce') . '"
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            var data = response.data;
+                            var statusHtml = "<div class=\'notice notice-success inline\'><p>";
+                            statusHtml += "⚡ <strong>Actualización rápida completada</strong><br>";
+                            statusHtml += "📦 Productos con cambios: " + data.products_updated + "<br>";
+                            statusHtml += "📈 Cambios de stock: " + data.stock_changes + "<br>";
+                            statusHtml += "💰 Cambios de precio: " + data.price_changes + "<br>";
+                            statusHtml += "⏱️ Tiempo de ejecución: " + data.execution_time + "<br>";
+                            statusHtml += "⏰ Fecha: " + data.timestamp;
+                            statusHtml += "</p></div>";
+                            
+                            if (data.errors && data.errors.length > 0) {
+                                statusHtml += "<div class=\'notice notice-warning inline\'><p>";
+                                statusHtml += "⚠️ <strong>Errores encontrados:</strong><br>";
+                                data.errors.forEach(function(error) {
+                                    statusHtml += "• " + error + "<br>";
+                                });
+                                statusHtml += "</p></div>";
+                            }
+                            
+                            $("#stock-update-status").html(statusHtml);
+                        } else {
+                            $("#stock-update-status").html("<div class=\'notice notice-error inline\'><p>❌ Error: " + response.data + "</p></div>");
+                        }
+                    },
+                    error: function() {
+                        $("#stock-update-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión al ejecutar actualización rápida</p></div>");
+                    },
+                    complete: function() {
+                        // Restaurar botón
+                        $btn.prop("disabled", false).text(originalText);
+                    }
+                });
+            });
+            
             // Carga de imágenes
             $("#load-images-btn").on("click", function(e) {
                 e.preventDefault();
@@ -673,6 +729,9 @@ function unycop_admin_scripts($hook) {
 
 // AJAX handler para actualizar stock
 add_action('wp_ajax_unycop_update_stock_ajax', 'unycop_update_stock_ajax_handler');
+
+// AJAX handler para actualización rápida
+add_action('wp_ajax_unycop_quick_update_ajax', 'unycop_quick_update_ajax_handler');
 function unycop_update_stock_ajax_handler() {
     // Verificar nonce
     if (!wp_verify_nonce($_POST['nonce'], 'unycop_update_stock_nonce')) {
@@ -687,6 +746,34 @@ function unycop_update_stock_ajax_handler() {
     try {
         $result = sync_stock_from_csv_detailed();
         wp_send_json_success($result);
+    } catch (Exception $e) {
+        wp_send_json_error($e->getMessage());
+    }
+}
+
+// Handler AJAX para actualización rápida
+function unycop_quick_update_ajax_handler() {
+    // Verificar nonce
+    if (!wp_verify_nonce($_POST['nonce'], 'unycop_quick_update_nonce')) {
+        wp_die('Error de seguridad');
+    }
+    
+    // Verificar permisos
+    if (!current_user_can('manage_options')) {
+        wp_die('Permisos insuficientes');
+    }
+    
+    try {
+        $start_time = microtime(true);
+        $products_updated = sync_stock_and_price_only();
+        $end_time = microtime(true);
+        $execution_time = round($end_time - $start_time, 2);
+        
+        wp_send_json_success(array(
+            'products_updated' => $products_updated,
+            'execution_time' => $execution_time . ' segundos',
+            'timestamp' => current_time('mysql')
+        ));
     } catch (Exception $e) {
         wp_send_json_error($e->getMessage());
     }
@@ -1134,6 +1221,10 @@ function unycop_connector_settings_page() {
                 🔄 Actualizar Stock Ahora
             </button>
             
+            <button id="quick-update-btn" class="button button-secondary" style="margin-bottom: 10px; margin-left: 10px;">
+                ⚡ Actualización Rápida (Solo Stock/Precio)
+            </button>
+            
             <div id="stock-update-status"></div>
             
             <!-- Sección para mostrar detalles de productos procesados -->
@@ -1469,6 +1560,11 @@ add_action('rest_api_init', function () {
         'callback' => 'unycop_api_stock_update',
         'permission_callback' => '__return_true',
     ));
+    register_rest_route('unycop/v1', '/quick-update', array(
+        'methods' => 'POST',
+        'callback' => 'unycop_api_quick_update',
+        'permission_callback' => '__return_true',
+    ));
 });
 
 function unycop_api_check_token($request) {
@@ -1539,6 +1635,25 @@ function unycop_api_stock_update($request) {
     }
     sync_stock_from_csv();
     return new WP_REST_Response(['success' => true], 200);
+}
+
+// Endpoint para actualización rápida de solo stock y precio
+function unycop_api_quick_update($request) {
+    if (!unycop_api_check_token($request)) {
+        return new WP_REST_Response(['error' => 'Token inválido'], 403);
+    }
+    
+    $start_time = microtime(true);
+    $products_updated = sync_stock_and_price_only();
+    $end_time = microtime(true);
+    $execution_time = round($end_time - $start_time, 2);
+    
+    return new WP_REST_Response([
+        'success' => true,
+        'products_updated' => $products_updated,
+        'execution_time' => $execution_time . ' segundos',
+        'type' => 'quick_update'
+    ], 200);
 }
 
 // =====================
@@ -3055,4 +3170,92 @@ function unycop_reactivate_cron_handler() {
     } catch (Exception $e) {
         wp_send_json_error('Error al reactivar el cron: ' . $e->getMessage());
     }
+}
+
+// Función optimizada para actualizaciones rápidas de solo stock y precio
+function sync_stock_and_price_only() {
+    $csv_file = find_stocklocal_csv();
+    
+    if (!$csv_file) {
+        error_log('UNYCOP SYNC: stocklocal.csv no encontrado');
+        return 0;
+    }
+
+    $products_updated = 0;
+    $stock_changes = 0;
+    $price_changes = 0;
+    $errors = 0;
+    
+    error_log('UNYCOP SYNC: Iniciando actualización rápida de stock y precio desde ' . $csv_file);
+
+    if (($handle = fopen($csv_file, "r")) !== FALSE) {
+        fgetcsv($handle, 1000, ";"); // Saltar encabezados
+
+        while (($data = fgetcsv($handle, 1000, ";")) !== FALSE) {
+            try {
+                if (count($data) < 7) {
+                    $errors++;
+                    continue;
+                }
+
+                $cn = str_pad(trim($data[0]), 6, '0', STR_PAD_LEFT);
+                $stock = intval($data[1]);
+                $price_with_tax = floatval($data[2]);
+                $iva = floatval($data[3]);
+                
+                if (empty($cn)) {
+                    $errors++;
+                    continue;
+                }
+
+                $product_id = wc_get_product_id_by_sku($cn);
+                
+                if ($product_id) {
+                    $product = wc_get_product($product_id);
+                    if (!$product) {
+                        $errors++;
+                        continue;
+                    }
+
+                    $changes_made = false;
+                    $old_stock = $product->get_stock_quantity();
+                    $old_price = $product->get_regular_price();
+
+                    // Solo actualizar stock si cambió
+                    if ($old_stock !== $stock) {
+                        wc_update_product_stock($product_id, $stock, 'set');
+                        $stock_changes++;
+                        $changes_made = true;
+                    }
+
+                    // Solo actualizar precio si cambió
+                    if (abs($old_price - $price_with_tax) > 0.01) { // Tolerancia de 1 céntimo
+                        $price_without_tax = $iva > 0 ? $price_with_tax / (1 + ($iva / 100)) : $price_with_tax;
+                        $product->set_regular_price($price_with_tax);
+                        $product->set_price($price_without_tax);
+                        $price_changes++;
+                        $changes_made = true;
+                    }
+
+                    // Solo guardar si hubo cambios
+                    if ($changes_made) {
+                        $product->save();
+                        $products_updated++;
+                        
+                        // Solo actualizar timestamp si hubo cambios
+                        update_post_meta($product_id, '_unycop_last_sync', current_time('mysql'));
+                    }
+                }
+                
+            } catch (Exception $e) {
+                error_log('UNYCOP SYNC ERROR: ' . $e->getMessage() . ' - Línea: ' . implode(';', $data));
+                $errors++;
+            }
+        }
+        fclose($handle);
+    }
+    
+    error_log("UNYCOP SYNC RÁPIDO COMPLETADO: {$products_updated} productos con cambios, {$stock_changes} cambios de stock, {$price_changes} cambios de precio, {$errors} errores");
+    
+    return $products_updated;
 }
