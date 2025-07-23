@@ -510,8 +510,8 @@ function unycop_admin_scripts($hook) {
                 // Deshabilitar botón y mostrar loading
                 $btn.prop("disabled", true).text("Actualizando...");
                 
-                // Mostrar mensaje de estado
-                $("#stock-update-status").html("<div class=\'notice notice-info inline\'><p>⚡ Ejecutando actualización rápida (solo stock y precio)...</p></div>");
+                // Mostrar mensaje de estado con spinner
+                $("#stock-update-status").html("<div class=\'notice notice-info inline\'><p>⚡ <strong>Ejecutando actualización rápida de stock y precio...</strong></p><div style=\'text-align: center; margin: 10px 0;\'><div style=\'display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #0073aa; border-radius: 50%; animation: spin 1s linear infinite;\'></div><p style=\'margin: 5px 0; font-size: 12px; color: #666;\'>🔄 Procesando productos...</p></div></div>");
                 
                 $.ajax({
                     url: ajaxurl,
