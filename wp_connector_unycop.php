@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce Unycop Connector
 Description: Sincroniza WooCommerce con Unycop Win importando el stock de productos desde un archivo CSV y exportando los pedidos completados a orders.csv. Incluye panel de configuración y endpoints REST API seguros para una integración eficiente en farmacia.
-Version: 3.0
+Version: 3.3
 Author: jnaranjo - illoque.com
 */
 
@@ -3192,7 +3192,12 @@ function sync_stock_and_price_only() {
     
     if (!$csv_file) {
         error_log('UNYCOP SYNC: stocklocal.csv no encontrado');
-        return 0;
+        return array(
+            'products_updated' => 0,
+            'stock_changes' => 0,
+            'price_changes' => 0,
+            'errors' => 1
+        );
     }
 
     $products_updated = 0;
@@ -3271,5 +3276,10 @@ function sync_stock_and_price_only() {
     
     error_log("UNYCOP SYNC RÁPIDO COMPLETADO: {$products_updated} productos con cambios, {$stock_changes} cambios de stock, {$price_changes} cambios de precio, {$errors} errores");
     
-    return $products_updated;
+    return array(
+        'products_updated' => $products_updated,
+        'stock_changes' => $stock_changes,
+        'price_changes' => $price_changes,
+        'errors' => $errors
+    );
 }
