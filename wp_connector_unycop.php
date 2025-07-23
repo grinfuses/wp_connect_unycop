@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce Unycop Connector
 Description: Sincroniza WooCommerce con Unycop Win importando el stock de productos desde un archivo CSV y exportando los pedidos completados a orders.csv. Incluye panel de configuración y endpoints REST API seguros para una integración eficiente en farmacia.
-Version: 3.0
+Version: 3.6
 Author: jnaranjo - illoque.com
 */
 
@@ -98,6 +98,7 @@ function sync_stock_from_csv() {
 
                     // Actualiza stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualiza precios
                     $price_without_tax = $iva > 0 ? $price_with_tax / (1 + ($iva / 100)) : $price_with_tax;
@@ -344,6 +345,16 @@ function unycop_connector_admin_menu() {
         'unycop-connector-settings',
         'unycop_connector_settings_page'
     );
+    
+    // Agregar subpágina de diagnóstico
+    add_submenu_page(
+        'options-general.php',
+        'UNYCOP Diagnóstico',
+        'UNYCOP Diagnóstico',
+        'manage_options',
+        'unycop-diagnostic',
+        'unycop_diagnostic_page'
+    );
 }
 
 // Registrar opciones
@@ -498,6 +509,104 @@ function unycop_admin_scripts($hook) {
                 
                 $("#logs-history").html(logsHtml);
             }
+            
+            // Botón de actualización rápida
+            $("#quick-update-btn").on("click", function(e) {
+                e.preventDefault();
+                
+                var $btn = $(this);
+                var originalText = $btn.text();
+                
+                // Deshabilitar botón y mostrar loading
+                $btn.prop("disabled", true).text("Actualizando...");
+                
+                // Mostrar mensaje de estado con spinner
+                $("#stock-update-status").html("<div class=\'notice notice-info inline\'><p>⚡ <strong>Ejecutando actualización rápida de stock y precio...</strong></p><div style=\'text-align: center; margin: 10px 0;\'><div style=\'display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #0073aa; border-radius: 50%; animation: spin 1s linear infinite;\'></div><p style=\'margin: 5px 0; font-size: 12px; color: #666;\'>🔄 Procesando productos...</p></div></div>");
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: "POST",
+                    data: {
+                        action: "unycop_quick_update_ajax",
+                        nonce: "' . wp_create_nonce('unycop_quick_update_nonce') . '"
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            var data = response.data;
+                            var statusHtml = "<div class=\'notice notice-success inline\'><p>";
+                            statusHtml += "⚡ <strong>Actualización rápida completada</strong><br>";
+                            statusHtml += "📦 Productos con cambios: " + data.products_updated + "<br>";
+                            statusHtml += "📈 Cambios de stock: " + data.stock_changes + "<br>";
+                            statusHtml += "💰 Cambios de precio: " + data.price_changes + "<br>";
+                            statusHtml += "📊 Productos procesados: " + data.total_processed + " de " + data.total_in_woo + " (WooCommerce)<br>";
+                            statusHtml += "📋 Productos en CSV: " + data.total_in_csv + "<br>";
+                            if (data.products_without_sku > 0) {
+                                statusHtml += "⚠️ Productos sin SKU: " + data.products_without_sku + "<br>";
+                            }
+                            if (data.products_not_loaded > 0) {
+                                statusHtml += "⚠️ Productos no cargados: " + data.products_not_loaded + "<br>";
+                            }
+                            statusHtml += "⏱️ Tiempo de ejecución: " + data.execution_time + "<br>";
+                            statusHtml += "⏰ Fecha: " + data.timestamp;
+                            statusHtml += "</p></div>";
+                            
+                            // Mostrar detalles de cambios si existen
+                            if (data.changes_details && data.changes_details.length > 0) {
+                                statusHtml += "<div class=\'card\' style=\'max-width: 800px; margin-top: 15px;\'>";
+                                statusHtml += "<h3>📋 Detalles de Productos Modificados</h3>";
+                                statusHtml += "<div style=\'max-height: 400px; overflow-y: auto;\'>";
+                                statusHtml += "<table class=\'wp-list-table widefat fixed striped\'>";
+                                statusHtml += "<thead><tr>";
+                                statusHtml += "<th>SKU</th><th>Nombre</th><th>Stock</th><th>Precio</th><th>Cambios</th>";
+                                statusHtml += "</tr></thead><tbody>";
+                                
+                                data.changes_details.forEach(function(change) {
+                                    var changes = [];
+                                    if (change.stock_changed) {
+                                        var oldStock = change.old_stock !== null && change.old_stock !== \'\' ? change.old_stock : \'Sin stock\';
+                                        changes.push(\'📈 Stock: \' + oldStock + \' → \' + change.new_stock);
+                                    }
+                                    if (change.price_changed) {
+                                        var oldPrice = change.old_price && change.old_price !== \'\' ? change.old_price + \'€\' : \'Sin precio\';
+                                        changes.push(\'💰 Precio: \' + oldPrice + \' → \' + change.new_price + \'€\');
+                                    }
+                                    
+                                    statusHtml += "<tr>";
+                                    statusHtml += "<td><strong>" + change.sku + "</strong></td>";
+                                    statusHtml += "<td>" + change.name + "</td>";
+                                    statusHtml += "<td>" + change.new_stock + "</td>";
+                                    statusHtml += "<td>" + change.new_price + "€</td>";
+                                    statusHtml += "<td>" + changes.join("<br>") + "</td>";
+                                    statusHtml += "</tr>";
+                                });
+                                
+                                statusHtml += "</tbody></table>";
+                                statusHtml += "</div></div>";
+                            }
+                            
+                            if (data.errors && data.errors.length > 0) {
+                                statusHtml += "<div class=\'notice notice-warning inline\'><p>";
+                                statusHtml += "⚠️ <strong>Errores encontrados:</strong><br>";
+                                data.errors.forEach(function(error) {
+                                    statusHtml += "• " + error + "<br>";
+                                });
+                                statusHtml += "</p></div>";
+                            }
+                            
+                            $("#stock-update-status").html(statusHtml);
+                        } else {
+                            $("#stock-update-status").html("<div class=\'notice notice-error inline\'><p>❌ Error: " + response.data + "</p></div>");
+                        }
+                    },
+                    error: function() {
+                        $("#stock-update-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión al ejecutar actualización rápida</p></div>");
+                    },
+                    complete: function() {
+                        // Restaurar botón
+                        $btn.prop("disabled", false).text(originalText);
+                    }
+                });
+            });
             
             // Carga de imágenes
             $("#load-images-btn").on("click", function(e) {
@@ -672,6 +781,14 @@ function unycop_admin_scripts($hook) {
 
 // AJAX handler para actualizar stock
 add_action('wp_ajax_unycop_update_stock_ajax', 'unycop_update_stock_ajax_handler');
+
+// AJAX handler para actualización rápida
+add_action('wp_ajax_unycop_quick_update_ajax', 'unycop_quick_update_ajax_handler');
+add_action('wp_ajax_nopriv_unycop_quick_update_ajax', 'unycop_quick_update_ajax_handler');
+
+// Handler AJAX de prueba simple
+add_action('wp_ajax_unycop_test_ajax', 'unycop_test_ajax_handler');
+add_action('wp_ajax_nopriv_unycop_test_ajax', 'unycop_test_ajax_handler');
 function unycop_update_stock_ajax_handler() {
     // Verificar nonce
     if (!wp_verify_nonce($_POST['nonce'], 'unycop_update_stock_nonce')) {
@@ -688,6 +805,315 @@ function unycop_update_stock_ajax_handler() {
         wp_send_json_success($result);
     } catch (Exception $e) {
         wp_send_json_error($e->getMessage());
+    }
+}
+
+// Handler AJAX para actualización rápida
+function unycop_quick_update_ajax_handler() {
+    // Log básico para verificar que el handler se ejecuta
+    error_log('UNYCOP AJAX: ===== INICIO ACTUALIZACIÓN RÁPIDA =====');
+    error_log('UNYCOP AJAX: Handler ejecutándose...');
+    
+    // Verificar POST data
+    if (!isset($_POST['nonce'])) {
+        error_log('UNYCOP AJAX ERROR: No se recibió nonce');
+        wp_send_json_error('No se recibió nonce');
+        return;
+    }
+    
+    error_log('UNYCOP AJAX: POST data recibida: ' . print_r($_POST, true));
+    
+    // Verificar nonce
+    if (!wp_verify_nonce($_POST['nonce'], 'unycop_quick_update_nonce')) {
+        error_log('UNYCOP AJAX ERROR: Nonce inválido');
+        wp_send_json_error('Error de seguridad - nonce inválido');
+        return;
+    }
+    
+    error_log('UNYCOP AJAX: Nonce válido');
+    
+    // Verificar permisos
+    if (!current_user_can('manage_options')) {
+        error_log('UNYCOP AJAX ERROR: Permisos insuficientes');
+        wp_send_json_error('Permisos insuficientes');
+        return;
+    }
+    
+    error_log('UNYCOP AJAX: Permisos verificados');
+    
+    // Verificar que WooCommerce esté cargado
+    if (!class_exists('WooCommerce')) {
+        error_log('UNYCOP AJAX ERROR: Clase WooCommerce no está disponible');
+        wp_send_json_error('WooCommerce no está disponible');
+        return;
+    }
+    
+    error_log('UNYCOP AJAX: WooCommerce clase disponible');
+    
+    // Verificar que WooCommerce esté disponible
+    if (!function_exists('wc_get_product_id_by_sku')) {
+        error_log('UNYCOP AJAX ERROR: WooCommerce no está disponible');
+        wp_send_json_error('WooCommerce no está disponible');
+        return;
+    }
+    
+    error_log('UNYCOP AJAX: Funciones WooCommerce disponibles');
+    
+    // Verificar archivo CSV
+    error_log('UNYCOP AJAX: Verificando archivo CSV...');
+    $csv_file = find_stocklocal_csv();
+    if (!$csv_file) {
+        error_log('UNYCOP AJAX ERROR: Archivo CSV no encontrado');
+        wp_send_json_error('Archivo CSV no encontrado');
+        return;
+    }
+    error_log('UNYCOP AJAX: Archivo CSV encontrado: ' . $csv_file);
+    
+    // Verificar que el archivo existe y es legible
+    if (!file_exists($csv_file)) {
+        error_log('UNYCOP AJAX ERROR: Archivo CSV no existe: ' . $csv_file);
+        wp_send_json_error('Archivo CSV no existe');
+        return;
+    }
+    if (!is_readable($csv_file)) {
+        error_log('UNYCOP AJAX ERROR: Archivo CSV no es legible: ' . $csv_file);
+        wp_send_json_error('Archivo CSV no es legible');
+        return;
+    }
+    error_log('UNYCOP AJAX: Archivo CSV existe y es legible');
+    
+    // Ejecutar la función de sincronización paso a paso
+    error_log('UNYCOP AJAX: Iniciando verificación de sync_stock_and_price_only...');
+    
+    // Paso 1: Verificar que la función existe
+    if (!function_exists('sync_stock_and_price_only')) {
+        error_log('UNYCOP AJAX ERROR: Función sync_stock_and_price_only no existe');
+        wp_send_json_error('Función sync_stock_and_price_only no existe');
+        return;
+    }
+    error_log('UNYCOP AJAX: Función sync_stock_and_price_only existe');
+    
+    // Paso 2: Intentar ejecutar la función
+    error_log('UNYCOP AJAX: Intentando ejecutar sync_stock_and_price_only...');
+    $start_time = microtime(true);
+    
+    try {
+        $result = sync_stock_and_price_only();
+        $end_time = microtime(true);
+        $execution_time = round($end_time - $start_time, 2);
+        
+        error_log('UNYCOP AJAX: Resultado de sync_stock_and_price_only: ' . print_r($result, true));
+        error_log('UNYCOP AJAX: Tiempo de ejecución: ' . $execution_time . ' segundos');
+        
+        $response_data = array(
+            'products_updated' => $result['products_updated'],
+            'stock_changes' => $result['stock_changes'],
+            'price_changes' => $result['price_changes'],
+            'errors' => $result['errors'],
+            'changes_details' => isset($result['changes_details']) ? $result['changes_details'] : array(),
+            'total_processed' => isset($result['total_processed']) ? $result['total_processed'] : 0,
+            'total_in_csv' => isset($result['total_in_csv']) ? $result['total_in_csv'] : 0,
+            'total_in_woo' => isset($result['total_in_woo']) ? $result['total_in_woo'] : 0,
+            'products_without_sku' => isset($result['products_without_sku']) ? $result['products_without_sku'] : 0,
+            'products_not_loaded' => isset($result['products_not_loaded']) ? $result['products_not_loaded'] : 0,
+            'execution_time' => $execution_time . ' segundos',
+            'timestamp' => current_time('mysql'),
+            'csv_file' => $csv_file,
+            'step' => 'Sincronización completada'
+        );
+        
+        error_log('UNYCOP AJAX: Enviando respuesta exitosa: ' . json_encode($response_data));
+        wp_send_json_success($response_data);
+        
+    } catch (Exception $e) {
+        error_log('UNYCOP AJAX ERROR: Excepción en sync_stock_and_price_only');
+        error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
+        error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
+        error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
+        error_log('UNYCOP AJAX ERROR: Trace: ' . $e->getTraceAsString());
+        wp_send_json_error('Error en sync_stock_and_price_only: ' . $e->getMessage());
+    } catch (Error $e) {
+        error_log('UNYCOP AJAX ERROR: Error fatal en sync_stock_and_price_only');
+        error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
+        error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
+        error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
+        wp_send_json_error('Error fatal en sync_stock_and_price_only: ' . $e->getMessage());
+    }
+    
+    // Código original comentado temporalmente - ACTIVANDO PASO A PASO
+    /*
+    try {
+        // Verificar POST data
+        if (!isset($_POST['nonce'])) {
+            error_log('UNYCOP AJAX ERROR: No se recibió nonce');
+            wp_send_json_error('No se recibió nonce');
+            return;
+        }
+        
+        error_log('UNYCOP AJAX: POST data recibida: ' . print_r($_POST, true));
+        
+        // Verificar nonce
+        if (!wp_verify_nonce($_POST['nonce'], 'unycop_quick_update_nonce')) {
+            error_log('UNYCOP AJAX ERROR: Nonce inválido');
+            wp_send_json_error('Error de seguridad - nonce inválido');
+            return;
+        }
+        
+        error_log('UNYCOP AJAX: Nonce válido');
+        
+        // Verificar permisos
+        if (!current_user_can('manage_options')) {
+            error_log('UNYCOP AJAX ERROR: Permisos insuficientes');
+            wp_send_json_error('Permisos insuficientes');
+            return;
+        }
+        
+        error_log('UNYCOP AJAX: Permisos verificados');
+        
+        // Verificar que WooCommerce esté cargado
+        if (!class_exists('WooCommerce')) {
+            error_log('UNYCOP AJAX ERROR: Clase WooCommerce no está disponible');
+            wp_send_json_error('WooCommerce no está disponible');
+            return;
+        }
+        
+        error_log('UNYCOP AJAX: WooCommerce clase disponible');
+        
+        // Verificar que WooCommerce esté disponible
+        if (!function_exists('wc_get_product_id_by_sku')) {
+            error_log('UNYCOP AJAX ERROR: WooCommerce no está disponible');
+            wp_send_json_error('WooCommerce no está disponible');
+            return;
+        }
+        
+        error_log('UNYCOP AJAX: Funciones WooCommerce disponibles');
+        
+        // Ejecutar la función de sincronización paso a paso
+        error_log('UNYCOP AJAX: Iniciando verificación paso a paso...');
+        
+        // Paso 1: Verificar archivo CSV
+        error_log('UNYCOP AJAX: Paso 1 - Verificando archivo CSV...');
+        $csv_file = find_stocklocal_csv();
+        if (!$csv_file) {
+            error_log('UNYCOP AJAX ERROR: Archivo CSV no encontrado');
+            wp_send_json_error('Archivo CSV no encontrado');
+            return;
+        }
+        error_log('UNYCOP AJAX: Archivo CSV encontrado: ' . $csv_file);
+        
+        // Paso 2: Verificar que el archivo existe y es legible
+        if (!file_exists($csv_file)) {
+            error_log('UNYCOP AJAX ERROR: Archivo CSV no existe: ' . $csv_file);
+            wp_send_json_error('Archivo CSV no existe');
+            return;
+        }
+        if (!is_readable($csv_file)) {
+            error_log('UNYCOP AJAX ERROR: Archivo CSV no es legible: ' . $csv_file);
+            wp_send_json_error('Archivo CSV no es legible');
+            return;
+        }
+        error_log('UNYCOP AJAX: Archivo CSV existe y es legible');
+        
+        // Paso 3: Intentar abrir el archivo
+        error_log('UNYCOP AJAX: Paso 3 - Intentando abrir archivo CSV...');
+        $handle = fopen($csv_file, "r");
+        if ($handle === FALSE) {
+            error_log('UNYCOP AJAX ERROR: No se pudo abrir el archivo CSV');
+            wp_send_json_error('No se pudo abrir el archivo CSV');
+            return;
+        }
+        error_log('UNYCOP AJAX: Archivo CSV abierto correctamente');
+        
+        // Paso 4: Leer encabezados
+        error_log('UNYCOP AJAX: Paso 4 - Leyendo encabezados...');
+        $headers = fgetcsv($handle, 1000, ";");
+        if ($headers === FALSE) {
+            error_log('UNYCOP AJAX ERROR: No se pudieron leer los encabezados');
+            fclose($handle);
+            wp_send_json_error('No se pudieron leer los encabezados del CSV');
+            return;
+        }
+        error_log('UNYCOP AJAX: Encabezados leídos: ' . print_r($headers, true));
+        
+        // Paso 5: Leer primera línea de datos
+        error_log('UNYCOP AJAX: Paso 5 - Leyendo primera línea de datos...');
+        $first_data = fgetcsv($handle, 1000, ";");
+        if ($first_data === FALSE) {
+            error_log('UNYCOP AJAX ERROR: No se pudo leer la primera línea de datos');
+            fclose($handle);
+            wp_send_json_error('No se pudo leer la primera línea de datos');
+            return;
+        }
+        error_log('UNYCOP AJAX: Primera línea de datos: ' . print_r($first_data, true));
+        
+        fclose($handle);
+        
+        // Paso 6: Ejecutar función completa (con manejo de errores)
+        error_log('UNYCOP AJAX: Paso 6 - Ejecutando sync_stock_and_price_only...');
+        $start_time = microtime(true);
+        
+        try {
+            $result = sync_stock_and_price_only();
+            $end_time = microtime(true);
+            $execution_time = round($end_time - $start_time, 2);
+            
+            error_log('UNYCOP AJAX: Resultado de sync_stock_and_price_only: ' . print_r($result, true));
+            error_log('UNYCOP AJAX: Tiempo de ejecución: ' . $execution_time . ' segundos');
+            
+            $response_data = array(
+                'products_updated' => $result['products_updated'],
+                'stock_changes' => $result['stock_changes'],
+                'price_changes' => $result['price_changes'],
+                'errors' => $result['errors'],
+                'execution_time' => $execution_time . ' segundos',
+                'timestamp' => current_time('mysql'),
+                'csv_file' => $csv_file,
+                'headers' => $headers,
+                'first_data_sample' => array_slice($first_data, 0, 3) // Solo primeros 3 campos
+            );
+            
+            error_log('UNYCOP AJAX: Enviando respuesta exitosa: ' . json_encode($response_data));
+            wp_send_json_success($response_data);
+            
+        } catch (Exception $e) {
+            error_log('UNYCOP AJAX ERROR: Excepción en sync_stock_and_price_only');
+            error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
+            error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
+            error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
+                    wp_send_json_error('Error en sync_stock_and_price_only: ' . $e->getMessage());
+    }
+    
+    } catch (Exception $e) {
+        error_log('UNYCOP AJAX ERROR: Excepción capturada');
+        error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
+        error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
+        error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
+        error_log('UNYCOP AJAX ERROR: Trace: ' . $e->getTraceAsString());
+        
+        wp_send_json_error('Error en actualización rápida: ' . $e->getMessage());
+    }
+    */
+}
+
+// Handler AJAX de prueba simple
+function unycop_test_ajax_handler() {
+    error_log('UNYCOP TEST AJAX: Handler de prueba ejecutándose...');
+    
+    try {
+        // Respuesta simple
+        $response_data = array(
+            'message' => 'Handler de prueba funcionando correctamente',
+            'timestamp' => current_time('mysql'),
+            'php_version' => phpversion(),
+            'wordpress_version' => get_bloginfo('version')
+        );
+        
+        error_log('UNYCOP TEST AJAX: Enviando respuesta de prueba');
+        wp_send_json_success($response_data);
+        
+    } catch (Exception $e) {
+        error_log('UNYCOP TEST AJAX ERROR: ' . $e->getMessage());
+        wp_send_json_error('Error en prueba: ' . $e->getMessage());
     }
 }
 
@@ -753,6 +1179,7 @@ function sync_stock_from_csv_detailed() {
 
                     // Actualiza stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualiza precios
                     $price_without_tax = $price_with_tax / (1 + ($iva / 100));
@@ -1132,6 +1559,10 @@ function unycop_connector_settings_page() {
                 🔄 Actualizar Stock Ahora
             </button>
             
+            <button id="quick-update-btn" class="button button-secondary" style="margin-bottom: 10px; margin-left: 10px;">
+                ⚡ Actualización Rápida (Solo Stock/Precio)
+            </button>
+            
             <div id="stock-update-status"></div>
             
             <!-- Sección para mostrar detalles de productos procesados -->
@@ -1467,6 +1898,11 @@ add_action('rest_api_init', function () {
         'callback' => 'unycop_api_stock_update',
         'permission_callback' => '__return_true',
     ));
+    register_rest_route('unycop/v1', '/quick-update', array(
+        'methods' => 'POST',
+        'callback' => 'unycop_api_quick_update',
+        'permission_callback' => '__return_true',
+    ));
 });
 
 function unycop_api_check_token($request) {
@@ -1537,6 +1973,25 @@ function unycop_api_stock_update($request) {
     }
     sync_stock_from_csv();
     return new WP_REST_Response(['success' => true], 200);
+}
+
+// Endpoint para actualización rápida de solo stock y precio
+function unycop_api_quick_update($request) {
+    if (!unycop_api_check_token($request)) {
+        return new WP_REST_Response(['error' => 'Token inválido'], 403);
+    }
+    
+    $start_time = microtime(true);
+    $products_updated = sync_stock_and_price_only();
+    $end_time = microtime(true);
+    $execution_time = round($end_time - $start_time, 2);
+    
+    return new WP_REST_Response([
+        'success' => true,
+        'products_updated' => $products_updated,
+        'execution_time' => $execution_time . ' segundos',
+        'type' => 'quick_update'
+    ], 200);
 }
 
 // =====================
@@ -1619,6 +2074,7 @@ function unycop_update_stock_chunk_handler() {
                 $old_stock = $product->get_stock_quantity();
                 $old_price = $product->get_regular_price();
                 wc_update_product_stock($product_id, $stock, 'set');
+                update_post_meta($product_id, '_manage_stock', 'yes');
                 $price_without_tax = $price_with_tax / (1 + ($iva / 100));
                 $product->set_regular_price($price_with_tax);
                 $product->set_price($price_without_tax);
@@ -2412,6 +2868,7 @@ function unycop_execute_initial_migration() {
 
                     // Actualizar stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualizar precios
                     $price_without_tax = $price_with_tax / (1 + ($iva / 100));
@@ -2652,6 +3109,7 @@ function unycop_execute_initial_migration_chunk($offset, $chunk_size) {
 
                     // Actualizar stock
                     wc_update_product_stock($product_id, $stock, 'set');
+                    update_post_meta($product_id, '_manage_stock', 'yes');
 
                     // Actualizar precios
                     $price_without_tax = $price_with_tax / (1 + ($iva / 100));
@@ -3050,4 +3508,570 @@ function unycop_reactivate_cron_handler() {
     } catch (Exception $e) {
         wp_send_json_error('Error al reactivar el cron: ' . $e->getMessage());
     }
+}
+
+// Función optimizada para actualizaciones rápidas de solo stock y precio
+function sync_stock_and_price_only() {
+    // Configurar límites de tiempo y memoria para AJAX
+    set_time_limit(300); // 5 minutos
+    ini_set('memory_limit', '256M');
+    
+    // Verificar que WooCommerce esté disponible
+    if (!function_exists('wc_get_product_id_by_sku')) {
+        error_log('UNYCOP SYNC ERROR: WooCommerce no está disponible en sync_stock_and_price_only');
+        return array(
+            'products_updated' => 0,
+            'stock_changes' => 0,
+            'price_changes' => 0,
+            'errors' => 1
+        );
+    }
+    
+    $csv_file = find_stocklocal_csv();
+    
+    if (!$csv_file) {
+        error_log('UNYCOP SYNC: stocklocal.csv no encontrado');
+        return array(
+            'products_updated' => 0,
+            'stock_changes' => 0,
+            'price_changes' => 0,
+            'errors' => 1
+        );
+    }
+
+    $products_updated = 0;
+    $stock_changes = 0;
+    $price_changes = 0;
+    $errors = 0;
+    $products_without_sku = 0;
+    $products_not_loaded = 0;
+    $changes_details = array(); // Array para almacenar detalles de cambios
+    
+    error_log('UNYCOP SYNC: ===== INICIO ACTUALIZACIÓN RÁPIDA =====');
+    error_log('UNYCOP SYNC: Iniciando actualización rápida de stock y precio desde ' . $csv_file);
+
+    // Primero cargar todos los datos del CSV en un array para acceso rápido
+    $csv_data = array();
+    if (($handle = fopen($csv_file, "r")) !== FALSE) {
+        fgetcsv($handle, 1000, ";"); // Saltar encabezados
+        while (($data = fgetcsv($handle, 1000, ";")) !== FALSE) {
+            if (count($data) >= 7) {
+                $cn = trim($data[0]); // No forzar 6 dígitos, usar el valor tal como está
+                if (!empty($cn)) {
+                    $csv_data[$cn] = array(
+                        'stock' => intval($data[1]),
+                        'price' => floatval($data[2]),
+                        'iva' => floatval($data[3])
+                    );
+                    // Log para debug del formato
+                    error_log("UNYCOP SYNC DEBUG: Cargando CSV - CN original: '{$data[0]}', CN procesado: '{$cn}'");
+                }
+            }
+        }
+        fclose($handle);
+    }
+    
+    error_log("UNYCOP SYNC: Cargados " . count($csv_data) . " productos del CSV");
+    error_log("UNYCOP SYNC: SKUs en CSV: " . implode(', ', array_keys($csv_data)));
+    
+    // Mostrar algunos ejemplos de datos del CSV para debug
+    $sample_count = 0;
+    foreach ($csv_data as $sku => $data) {
+        if ($sample_count < 5) {
+            error_log("UNYCOP SYNC DEBUG: Muestra CSV - SKU: {$sku}, Stock: {$data['stock']}, Precio: {$data['price']}");
+            $sample_count++;
+        } else {
+            break;
+        }
+    }
+
+    // Ahora recorrer todos los productos de WooCommerce
+    $args = array(
+        'post_type' => 'product',
+        'post_status' => 'publish',
+        'posts_per_page' => -1,
+        'meta_query' => array(
+            array(
+                'key' => '_sku',
+                'compare' => 'EXISTS'
+            )
+        )
+    );
+    
+    $products_query = new WP_Query($args);
+    $total_woo_products = $products_query->found_posts;
+    $processed = 0;
+    
+    error_log("UNYCOP SYNC: Encontrados {$total_woo_products} productos en WooCommerce");
+    
+    if ($products_query->have_posts()) {
+        while ($products_query->have_posts()) {
+            $products_query->the_post();
+            $product_id = get_the_ID();
+            
+            try {
+                $product = wc_get_product($product_id);
+                if (!$product) {
+                    error_log("UNYCOP SYNC DEBUG: Producto ID {$product_id} no se pudo cargar con wc_get_product");
+                    $products_not_loaded++;
+                    continue;
+                }
+                
+                $sku = $product->get_sku();
+                if (empty($sku)) {
+                    error_log("UNYCOP SYNC DEBUG: Producto ID {$product_id} no tiene SKU asignado");
+                    $products_without_sku++;
+                    continue;
+                }
+                
+                $processed++;
+                
+                // Log para debug del SKU de WooCommerce
+                error_log("UNYCOP SYNC DEBUG: Procesando WooCommerce - SKU: '{$sku}'");
+                
+                // Verificar si este producto existe en el CSV
+                if (isset($csv_data[$sku])) {
+                    $csv_stock = $csv_data[$sku]['stock'];
+                    $csv_price = $csv_data[$sku]['price'];
+                    $csv_iva = $csv_data[$sku]['iva'];
+                    
+                    $old_stock = $product->get_stock_quantity();
+                    $old_price = $product->get_regular_price();
+                    $product_name = $product->get_name();
+                    
+                    // Log detallado para debug
+                    error_log("UNYCOP SYNC DEBUG: Producto encontrado en CSV - SKU: {$sku}, Nombre: {$product_name}");
+                    error_log("UNYCOP SYNC DEBUG: Stock actual: {$old_stock}, Stock CSV: {$csv_stock}");
+                    error_log("UNYCOP SYNC DEBUG: Precio actual: {$old_price}, Precio CSV: {$csv_price}");
+                    
+                    // Verificar si este producto ya fue actualizado recientemente
+                    $last_sync = get_post_meta($product_id, '_unycop_last_sync', true);
+                    if ($last_sync) {
+                        error_log("UNYCOP SYNC DEBUG: Última sincronización para {$sku}: {$last_sync}");
+                    }
+                    
+                    $change_info = array(
+                        'product_id' => $product_id,
+                        'name' => $product_name,
+                        'sku' => $sku,
+                        'stock_changed' => false,
+                        'price_changed' => false,
+                        'old_stock' => $old_stock,
+                        'new_stock' => $csv_stock,
+                        'old_price' => $old_price,
+                        'new_price' => $csv_price
+                    );
+                    
+                    $changes_made = false;
+                    
+                    // Verificar si cambió el stock - Normalizar tipos de datos
+                    $old_stock_normalized = $old_stock === null ? 0 : intval($old_stock);
+                    $csv_stock_normalized = intval($csv_stock);
+                    
+                    error_log("UNYCOP SYNC DEBUG: Comparando stock para {$sku} - Actual: '{$old_stock}' → normalizado: {$old_stock_normalized}, CSV: '{$csv_stock}' → normalizado: {$csv_stock_normalized}");
+                    if ($old_stock_normalized !== $csv_stock_normalized) {
+                        // Usar solo el método del objeto producto para evitar conflictos
+                        $product->set_stock_quantity($csv_stock);
+                        
+                        $stock_changes++;
+                        $changes_made = true;
+                        $change_info['stock_changed'] = true;
+                        error_log("UNYCOP SYNC: Stock actualizado para {$sku}: {$old_stock} → {$csv_stock}");
+                    } else {
+                        error_log("UNYCOP SYNC DEBUG: Stock NO cambió para {$sku} - Ambos valores son iguales ({$old_stock_normalized})");
+                    }
+                    
+                    // Verificar si cambió el precio - Normalizar tipos de datos
+                    $old_price_normalized = is_numeric($old_price) ? round(floatval($old_price), 2) : 0.0;
+                    $csv_price_normalized = round(floatval($csv_price), 2);
+                    
+                    error_log("UNYCOP SYNC DEBUG: Comparando precio para {$sku} - Actual: '{$old_price}' → normalizado: {$old_price_normalized}, CSV: '{$csv_price}' → normalizado: {$csv_price_normalized}");
+                    if ($old_price_normalized !== $csv_price_normalized) {
+                        $price_without_tax = $csv_iva > 0 ? $csv_price / (1 + ($csv_iva / 100)) : $csv_price;
+                        $product->set_regular_price($csv_price);
+                        $product->set_price($price_without_tax);
+                        $price_changes++;
+                        $changes_made = true;
+                        $change_info['price_changed'] = true;
+                        error_log("UNYCOP SYNC: Precio actualizado para {$sku}: {$old_price}€ → {$csv_price}€");
+                    } else {
+                        error_log("UNYCOP SYNC DEBUG: Precio NO cambió para {$sku} - Ambos valores son iguales ({$old_price_normalized})");
+                    }
+                    
+                    // Solo guardar si hubo cambios
+                    if ($changes_made) {
+                        // Usar métodos directos de base de datos para asegurar persistencia
+                        $update_success = true;
+                        
+                        // Actualizar stock directamente en la base de datos
+                        if ($change_info['stock_changed']) {
+                            $stock_update = update_post_meta($product_id, '_stock', $csv_stock);
+                            if (!$stock_update) {
+                                error_log("UNYCOP SYNC ERROR: Fallo al actualizar stock en BD para {$sku}");
+                                $update_success = false;
+                            }
+                        }
+                        
+                        // Actualizar precio directamente en la base de datos
+                        if ($change_info['price_changed']) {
+                            $price_update = update_post_meta($product_id, '_regular_price', $csv_price);
+                            if (!$price_update) {
+                                error_log("UNYCOP SYNC ERROR: Fallo al actualizar precio en BD para {$sku}");
+                                $update_success = false;
+                            }
+                            
+                            // También actualizar el precio de venta
+                            $price_without_tax = $csv_iva > 0 ? $csv_price / (1 + ($csv_iva / 100)) : $csv_price;
+                            $sale_price_update = update_post_meta($product_id, '_price', $price_without_tax);
+                            if (!$sale_price_update) {
+                                error_log("UNYCOP SYNC ERROR: Fallo al actualizar precio de venta en BD para {$sku}");
+                                $update_success = false;
+                            }
+                        }
+                        
+                        if ($update_success) {
+                            // Limpiar caché específica del producto
+                            clean_post_cache($product_id);
+                            wp_cache_delete($product_id, 'posts');
+                            
+                            // Esperar un momento para que se procese la actualización
+                            usleep(100000); // 0.1 segundos
+                            
+                            // Verificar que los cambios se aplicaron correctamente
+                            $updated_product = wc_get_product($product_id);
+                            if ($updated_product) {
+                                $new_stock = $updated_product->get_stock_quantity();
+                                $new_price = $updated_product->get_regular_price();
+                                error_log("UNYCOP SYNC DEBUG: Verificación post-guardado para {$sku} - Stock: {$new_stock}, Precio: {$new_price}");
+                                
+                                // Verificar si los valores realmente cambiaron
+                                if ($new_stock == $csv_stock && $new_price == $csv_price) {
+                                    error_log("UNYCOP SYNC DEBUG: ✅ Cambios confirmados para {$sku} - Stock y precio actualizados correctamente");
+                                    $products_updated++;
+                                    update_post_meta($product_id, '_unycop_last_sync', current_time('mysql'));
+                                    $changes_details[] = $change_info;
+                                } else {
+                                    error_log("UNYCOP SYNC DEBUG: ❌ ERROR - Cambios NO se aplicaron para {$sku} - Stock esperado: {$csv_stock}, actual: {$new_stock}, Precio esperado: {$csv_price}, actual: {$new_price}");
+                                    $errors++;
+                                }
+                            } else {
+                                error_log("UNYCOP SYNC ERROR: No se pudo cargar el producto actualizado {$sku} (ID: {$product_id})");
+                                $errors++;
+                            }
+                        } else {
+                            error_log("UNYCOP SYNC ERROR: Fallo en actualización directa de BD para {$sku} (ID: {$product_id})");
+                            $errors++;
+                        }
+                    } else {
+                        error_log("UNYCOP SYNC DEBUG: NO se realizaron cambios para {$sku} - Stock y precio sin cambios");
+                    }
+                } else {
+                    // Log para productos que NO están en el CSV
+                    error_log("UNYCOP SYNC DEBUG: Producto NO encontrado en CSV - SKU: '{$sku}', Nombre: {$product->get_name()}");
+                    error_log("UNYCOP SYNC DEBUG: SKUs disponibles en CSV: " . implode(', ', array_keys($csv_data)));
+                }
+                
+            } catch (Exception $e) {
+                error_log('UNYCOP SYNC ERROR: ' . $e->getMessage() . ' - Producto ID: ' . $product_id);
+                $errors++;
+            }
+        }
+        wp_reset_postdata();
+    }
+    
+    // Limpiar caché de WooCommerce después de las actualizaciones
+    if ($products_updated > 0) {
+        wc_delete_product_transients();
+        wp_cache_flush(); // Limpiar toda la caché de WordPress
+        error_log("UNYCOP SYNC: Caché de WooCommerce y WordPress limpiada después de {$products_updated} actualizaciones");
+    }
+    
+    error_log("UNYCOP SYNC RÁPIDO COMPLETADO: {$products_updated} productos con cambios, {$stock_changes} cambios de stock, {$price_changes} cambios de precio, {$errors} errores, {$processed} productos procesados de {$total_woo_products} totales en WooCommerce");
+    error_log("UNYCOP SYNC RESUMEN: {$products_not_loaded} productos no se pudieron cargar, {$products_without_sku} productos sin SKU, {$processed} productos procesados exitosamente");
+    
+    // Verificación final de persistencia
+    if ($products_updated > 0) {
+        error_log("UNYCOP SYNC: ===== VERIFICACIÓN FINAL DE PERSISTENCIA =====");
+        $verification_errors = 0;
+        foreach ($changes_details as $change) {
+            $product_id = $change['product_id'];
+            $sku = $change['sku'];
+            $expected_stock = $change['new_stock'];
+            $expected_price = $change['new_price'];
+            
+            // Recargar el producto desde la base de datos
+            $final_product = wc_get_product($product_id);
+            if ($final_product) {
+                $final_stock = $final_product->get_stock_quantity();
+                $final_price = $final_product->get_regular_price();
+                
+                if ($final_stock == $expected_stock && $final_price == $expected_price) {
+                    error_log("UNYCOP SYNC VERIFICACIÓN: ✅ {$sku} - Cambios persistentes confirmados");
+                } else {
+                    error_log("UNYCOP SYNC VERIFICACIÓN: ❌ {$sku} - Cambios NO persistentes - Stock esperado: {$expected_stock}, actual: {$final_stock}, Precio esperado: {$expected_price}, actual: {$final_price}");
+                    $verification_errors++;
+                }
+            } else {
+                error_log("UNYCOP SYNC VERIFICACIÓN: ❌ {$sku} - No se pudo cargar para verificación");
+                $verification_errors++;
+            }
+        }
+        error_log("UNYCOP SYNC: Verificación final completada - {$verification_errors} errores de persistencia");
+    }
+    
+    error_log('UNYCOP SYNC: ===== FIN ACTUALIZACIÓN RÁPIDA =====');
+    
+    return array(
+        'products_updated' => $products_updated,
+        'stock_changes' => $stock_changes,
+        'price_changes' => $price_changes,
+        'errors' => $errors,
+        'changes_details' => $changes_details,
+        'total_processed' => $processed,
+        'total_in_csv' => count($csv_data),
+        'total_in_woo' => $total_woo_products,
+        'products_without_sku' => $products_without_sku,
+        'products_not_loaded' => $products_not_loaded
+    );
+}
+
+// Página de diagnóstico para verificar el estado del plugin
+function unycop_diagnostic_page() {
+    echo '<div class="wrap">';
+    echo '<h1>🔍 Diagnóstico UNYCOP Connector</h1>';
+    
+    echo '<h2>✅ Verificaciones de WordPress</h2>';
+    
+    // Verificar si WooCommerce está activo
+    if (class_exists('WooCommerce')) {
+        echo '<p>✅ WooCommerce está activo</p>';
+    } else {
+        echo '<p>❌ WooCommerce NO está activo</p>';
+    }
+    
+    // Verificar funciones de WooCommerce
+    if (function_exists('wc_get_product_id_by_sku')) {
+        echo '<p>✅ wc_get_product_id_by_sku está disponible</p>';
+    } else {
+        echo '<p>❌ wc_get_product_id_by_sku NO está disponible</p>';
+    }
+    
+    if (function_exists('wc_get_product')) {
+        echo '<p>✅ wc_get_product está disponible</p>';
+    } else {
+        echo '<p>❌ wc_get_product NO está disponible</p>';
+    }
+    
+    if (function_exists('wc_update_product_stock')) {
+        echo '<p>✅ wc_update_product_stock está disponible</p>';
+    } else {
+        echo '<p>❌ wc_update_product_stock NO está disponible</p>';
+    }
+    
+    // Verificar si el plugin está activo
+    if (function_exists('unycop_quick_update_ajax_handler')) {
+        echo '<p>✅ Handler AJAX del plugin está disponible</p>';
+    } else {
+        echo '<p>❌ Handler AJAX del plugin NO está disponible</p>';
+    }
+    
+    // Verificar archivo CSV
+    if (function_exists('find_stocklocal_csv')) {
+        $csv_file = find_stocklocal_csv();
+        if ($csv_file) {
+            echo '<p>✅ Archivo CSV encontrado: ' . esc_html($csv_file) . '</p>';
+            echo '<p>📁 Existe: ' . (file_exists($csv_file) ? 'SÍ' : 'NO') . '</p>';
+            echo '<p>🔐 Legible: ' . (is_readable($csv_file) ? 'SÍ' : 'NO') . '</p>';
+        } else {
+            echo '<p>❌ Archivo CSV no encontrado</p>';
+        }
+    } else {
+        echo '<p>❌ Función find_stocklocal_csv no disponible</p>';
+    }
+    
+    // Verificar permisos del usuario
+    if (current_user_can('manage_options')) {
+        echo '<p>✅ Usuario tiene permisos manage_options</p>';
+    } else {
+        echo '<p>❌ Usuario NO tiene permisos manage_options</p>';
+    }
+    
+    echo '<hr>';
+    echo '<h3>🔧 Información del sistema:</h3>';
+    echo '<p>WordPress Version: ' . get_bloginfo('version') . '</p>';
+    echo '<p>PHP Version: ' . phpversion() . '</p>';
+    echo '<p>Usuario ID: ' . get_current_user_id() . '</p>';
+    $user = wp_get_current_user();
+    echo '<p>Roles: ' . implode(', ', $user->roles) . '</p>';
+    
+    echo '<hr>';
+    echo '<h3>🧪 Prueba manual del AJAX:</h3>';
+    echo '<p>Si todo está bien arriba, puedes probar manualmente:</p>';
+    echo '<pre>';
+    echo 'POST a: ' . admin_url('admin-ajax.php') . "\n";
+    echo 'Action: unycop_quick_update_ajax' . "\n";
+    echo 'Nonce: ' . wp_create_nonce('unycop_quick_update_nonce') . "\n";
+    echo '</pre>';
+    
+    echo '<hr>';
+    echo '<h3>🧪 Prueba AJAX simple:</h3>';
+    echo '<p>Prueba este botón para verificar si el AJAX funciona:</p>';
+    echo '<button id="test-ajax-btn" class="button button-primary">Probar AJAX Simple</button>';
+    echo '<div id="test-ajax-status"></div>';
+    
+    echo '<hr>';
+    echo '<h3>🧪 Prueba Handler Principal:</h3>';
+    echo '<p>Prueba este botón para verificar el handler principal con diagnóstico paso a paso:</p>';
+    echo '<button id="test-main-ajax-btn" class="button button-secondary">Probar Handler Principal</button>';
+    echo '<div id="test-main-ajax-status"></div>';
+    
+    echo '<script>
+    jQuery(document).ready(function($) {
+        $("#test-ajax-btn").on("click", function(e) {
+            e.preventDefault();
+            
+            var $btn = $(this);
+            var originalText = $btn.text();
+            
+            $btn.prop("disabled", true).text("Probando...");
+            $("#test-ajax-status").html("<div class=\'notice notice-info inline\'><p>Probando AJAX...</p></div>");
+            
+            $.ajax({
+                url: ajaxurl,
+                type: "POST",
+                data: {
+                    action: "unycop_test_ajax"
+                },
+                success: function(response) {
+                    if (response.success) {
+                        var data = response.data;
+                        var statusHtml = "<div class=\'notice notice-success inline\'><p>";
+                        statusHtml += "✅ <strong>Prueba AJAX exitosa</strong><br>";
+                        statusHtml += "Mensaje: " + data.message + "<br>";
+                        statusHtml += "Timestamp: " + data.timestamp + "<br>";
+                        statusHtml += "PHP: " + data.php_version + "<br>";
+                        statusHtml += "WordPress: " + data.wordpress_version;
+                        statusHtml += "</p></div>";
+                        $("#test-ajax-status").html(statusHtml);
+                    } else {
+                        $("#test-ajax-status").html("<div class=\'notice notice-error inline\'><p>❌ Error: " + response.data + "</p></div>");
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $("#test-ajax-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión: " + error + "</p></div>");
+                },
+                complete: function() {
+                    $btn.prop("disabled", false).text(originalText);
+                }
+            });
+        });
+        
+        // Botón para probar el handler principal
+        $("#test-main-ajax-btn").on("click", function(e) {
+            e.preventDefault();
+            
+            var $btn = $(this);
+            var originalText = $btn.text();
+            
+            $btn.prop("disabled", true).text("Probando...");
+            $("#test-main-ajax-status").html("<div class=\'notice notice-info inline\'><p>Probando handler principal...</p></div>");
+            
+            $.ajax({
+                url: ajaxurl,
+                type: "POST",
+                data: {
+                    action: "unycop_quick_update_ajax",
+                    nonce: "' . wp_create_nonce('unycop_quick_update_nonce') . '"
+                },
+                success: function(response) {
+                    if (response.success) {
+                        var data = response.data;
+                        var statusHtml = "<div class=\'notice notice-success inline\'><p>";
+                        statusHtml += "✅ <strong>Handler principal exitoso</strong><br>";
+                        statusHtml += "Mensaje: " + data.message + "<br>";
+                        statusHtml += "Paso: " + data.step + "<br>";
+                        if (data.step === \'POST data verificada\') {
+                            statusHtml += "<strong>✅ POST data funciona correctamente</strong><br>";
+                        }
+                        if (data.step === \'Nonce verificado\') {
+                            statusHtml += "<strong>✅ Nonce funciona correctamente</strong><br>";
+                        }
+                        if (data.step === \'Permisos verificados\') {
+                            statusHtml += "<strong>✅ Permisos funcionan correctamente</strong><br>";
+                        }
+                        if (data.step === \'WooCommerce verificado\') {
+                            statusHtml += "<strong>✅ WooCommerce funciona correctamente</strong><br>";
+                        }
+                        if (data.step === \'CSV verificado\') {
+                            statusHtml += "<strong>✅ Archivo CSV funciona correctamente</strong><br>";
+                            statusHtml += "Archivo: " + data.csv_file + "<br>";
+                        }
+                        if (data.step === \'Sincronización completada\') {
+                            statusHtml += "<strong>✅ Sincronización completada exitosamente</strong><br>";
+                            statusHtml += "Productos actualizados: " + data.products_updated + "<br>";
+                            statusHtml += "Cambios de stock: " + data.stock_changes + "<br>";
+                            statusHtml += "Cambios de precio: " + data.price_changes + "<br>";
+                            statusHtml += "Errores: " + data.errors + "<br>";
+                            statusHtml += "Tiempo de ejecución: " + data.execution_time + "<br>";
+                            statusHtml += "Archivo CSV: " + data.csv_file + "<br>";
+                        }
+                        statusHtml += "Timestamp: " + data.timestamp;
+                        statusHtml += "</p></div>";
+                        $("#test-main-ajax-status").html(statusHtml);
+                    } else {
+                        $("#test-main-ajax-status").html("<div class=\'notice notice-error inline\'><p>❌ Error: " + response.data + "</p></div>");
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $("#test-main-ajax-status").html("<div class=\'notice notice-error inline\'><p>❌ Error de conexión: " + error + "</p></div>");
+                },
+                complete: function() {
+                    $btn.prop("disabled", false).text(originalText);
+                }
+            });
+        });
+    });
+    </script>';
+    
+    echo '<hr>';
+    echo '<h3>📝 Logs recientes:</h3>';
+    $log_file = WP_CONTENT_DIR . '/debug.log';
+    if (file_exists($log_file)) {
+        $logs = file_get_contents($log_file);
+        $lines = explode("\n", $logs);
+        $recent_lines = array_slice($lines, -20); // Últimas 20 líneas
+        echo '<pre style="background: #f5f5f5; padding: 10px; max-height: 300px; overflow-y: auto;">';
+        foreach ($recent_lines as $line) {
+            if (strpos($line, 'UNYCOP') !== false) {
+                echo esc_html($line) . "\n";
+            }
+        }
+        echo '</pre>';
+    } else {
+        echo '<p>❌ Archivo debug.log no encontrado en: ' . esc_html($log_file) . '</p>';
+    }
+    
+    echo '<hr>';
+    echo '<h3>🔍 Verificación de archivos:</h3>';
+    $current_dir = __DIR__;
+    echo '<p>Directorio del plugin: ' . esc_html($current_dir) . '</p>';
+    
+    // Buscar archivos importantes
+    $files_to_check = array(
+        'wp-config.php',
+        'wp-load.php',
+        'wp-admin/admin-ajax.php',
+        'stocklocal.csv'
+    );
+    
+    foreach ($files_to_check as $file) {
+        $full_path = $current_dir . '/' . $file;
+        if (file_exists($full_path)) {
+            echo '<p>✅ ' . esc_html($file) . ' encontrado</p>';
+        } else {
+            echo '<p>❌ ' . esc_html($file) . ' NO encontrado</p>';
+        }
+    }
+    
+    echo '</div>';
 }

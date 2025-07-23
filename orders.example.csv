@@ -1,0 +1,4 @@
+Referencia_del_pedido;id_del_pedido;Fecha;Id_cliente_web;Nombre_cliente;Apellidos_cliente;Email_cliente;Telefono_cliente;DNI;direccion;CP;Ciudad;Provincia;Codigo_nacional_del_producto;Cantidad;PVP_web;Total_Productos;Total_pago;Gastos_de_envio;Precio_unitario_sin_IVA;Precio_unitario_con_IVA
+ORD-2024-001;1234;15/01/2024 10:30:25;567;María;García López;maria@email.com;666123456;12345678A;Calle Mayor 123;28001;Madrid;Madrid;000001;2;12.50;25.00;28.50;3.50;10.33;12.50
+ORD-2024-002;1235;15/01/2024 11:15:10;568;Juan;Martínez Ruiz;juan@email.com;666789012;87654321B;Avenida Gran Vía 45;28013;Madrid;Madrid;000002;1;8.75;8.75;12.25;3.50;7.95;8.75
+ORD-2024-003;1236;15/01/2024 14:20:33;569;Ana;Fernández Jiménez;ana@email.com;666345678;11223344C;Plaza España 7;28008;Madrid;Madrid;000003;1;25.90;25.90;29.40;3.50;21.40;25.90 

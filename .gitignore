@@ -1,0 +1,60 @@
+# 🏥 Unycop WooCommerce Connector - Archivos sensibles
+
+# 📊 Archivos CSV con datos de la farmacia
+stocklocal.csv
+orders.csv
+back_stocklocal.csv
+backup_productos_unycop_*.csv
+# Excluir archivos CSV reales pero permitir archivos de ejemplo
+*.csv
+!*.example.csv
+
+# 🔐 Archivos de configuración sensibles
+wp-config.php
+.env
+config.php
+
+# 📝 Logs y archivos temporales
+*.log
+debug.log
+error.log
+temp/
+tmp/
+
+# 🗂️ Archivos de WordPress
+wp-content/uploads/
+wp-content/cache/
+wp-content/backup-db/
+
+# 💾 Archivos de base de datos
+*.sql
+*.sql.gz
+*.bak
+
+# 🔧 Archivos de desarrollo
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# 📦 Archivos comprimidos
+*.zip
+*.tar.gz
+*.rar
+
+# 🖼️ Imágenes de productos (pueden ser grandes)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# 📋 Archivos de respaldo
+backup/
+backups/
+*.backup
+
+# 🚨 Archivos de seguridad
+.htaccess
+robots.txt 
