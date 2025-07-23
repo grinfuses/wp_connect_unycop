@@ -30,10 +30,22 @@
 - **Carga de imágenes**: Descarga automática desde múltiples fuentes
 - **🔄 Persistencia garantizada**: Actualización directa en base de datos
 
-### 🔒 **API REST Segura**
-- **Autenticación por token**: Acceso seguro desde Unycop Win
-- **Endpoints optimizados**: Descarga de pedidos y actualización de stock
-- **Logs detallados**: Seguimiento completo de todas las operaciones
+### 🔒 **Seguridad y Privacidad**
+
+### 🔐 **Protección de Datos Sensibles**
+- **Archivos CSV excluidos**: `stocklocal.csv` y `orders.csv` no se suben al repositorio
+- **Archivos de ejemplo**: `stocklocal.example.csv` y `orders.example.csv` con datos ficticios
+- **Configuración segura**: Tokens y credenciales protegidos
+- **Logs sanitizados**: Información sensible no se registra en logs públicos
+
+### 🛡️ **Buenas Prácticas**
+```
+✅ Nunca subir archivos CSV reales al repositorio
+✅ Usar archivos .example.csv para desarrollo
+✅ Configurar .gitignore correctamente
+✅ Proteger tokens de API
+✅ Revisar logs antes de compartir
+```
 
 ## 📋 Requisitos
 
@@ -77,11 +89,15 @@ CN;Stock;PVP_con_IVA;IVA;Prospecto;EAN13;Descripcion;PC;Familia;Categoria;Subcat
 001254;8;25.90;10;http://prospecto2.pdf;8436558880160;VITAMINA D3 1000UI;18.50;VITAMINAS;PARAFARMACIA;SUPLEMENTOS;LABORATORIOS CINFA;24.20;C3-D1
 ```
 
+**📋 Archivo de ejemplo:** `stocklocal.example.csv` (datos ficticios para desarrollo)
+
 ### 📤 **orders.csv** (Salida - hacia Unycop Win)
 ```csv
 Referencia_del_pedido;id_del_pedido;Fecha;Id_cliente_web;Nombre_cliente;Apellidos_cliente;Email_cliente;Telefono_cliente;DNI;direccion;CP;Ciudad;Provincia;Codigo_nacional_del_producto;Cantidad;PVP_web;Total_Productos;Total_pago;Gastos_de_envio;Precio_unitario_sin_IVA;Precio_unitario_con_IVA
 ORD-2024-001;1234;15/01/2024 10:30:25;567;María;García López;maria@email.com;666123456;12345678A;Calle Mayor 123;28001;Madrid;Madrid;000524;2;12.50;25.00;28.50;3.50;10.33;12.50
 ```
+
+**📋 Archivo de ejemplo:** `orders.example.csv` (datos ficticios para desarrollo)
 
 ## 🎯 Casos de Uso Principales
 
