@@ -753,19 +753,25 @@ function unycop_update_stock_ajax_handler() {
 
 // Handler AJAX para actualización rápida
 function unycop_quick_update_ajax_handler() {
-    // Log para debugging
-    error_log('UNYCOP AJAX: Iniciando actualización rápida');
+    // Log detallado para debugging
+    error_log('UNYCOP AJAX: ===== INICIO ACTUALIZACIÓN RÁPIDA =====');
+    error_log('UNYCOP AJAX: POST data: ' . print_r($_POST, true));
+    error_log('UNYCOP AJAX: User ID: ' . get_current_user_id());
+    error_log('UNYCOP AJAX: User capabilities: ' . print_r(wp_get_current_user()->allcaps, true));
     
     // Verificar nonce
     if (!wp_verify_nonce($_POST['nonce'], 'unycop_quick_update_nonce')) {
-        error_log('UNYCOP AJAX: Error de nonce');
+        error_log('UNYCOP AJAX: ERROR - Nonce inválido');
+        error_log('UNYCOP AJAX: Nonce recibido: ' . $_POST['nonce']);
+        error_log('UNYCOP AJAX: Nonce esperado: ' . wp_create_nonce('unycop_quick_update_nonce'));
         wp_send_json_error('Error de seguridad - nonce inválido');
         return;
     }
     
     // Verificar permisos
     if (!current_user_can('manage_options')) {
-        error_log('UNYCOP AJAX: Error de permisos');
+        error_log('UNYCOP AJAX: ERROR - Permisos insuficientes');
+        error_log('UNYCOP AJAX: User can manage_options: ' . (current_user_can('manage_options') ? 'YES' : 'NO'));
         wp_send_json_error('Permisos insuficientes');
         return;
     }
@@ -777,18 +783,28 @@ function unycop_quick_update_ajax_handler() {
         $end_time = microtime(true);
         $execution_time = round($end_time - $start_time, 2);
         
-        error_log('UNYCOP AJAX: Actualización rápida completada - ' . json_encode($result));
+        error_log('UNYCOP AJAX: Resultado de sync_stock_and_price_only: ' . print_r($result, true));
+        error_log('UNYCOP AJAX: Tiempo de ejecución: ' . $execution_time . ' segundos');
         
-        wp_send_json_success(array(
+        $response_data = array(
             'products_updated' => $result['products_updated'],
             'stock_changes' => $result['stock_changes'],
             'price_changes' => $result['price_changes'],
             'errors' => $result['errors'],
             'execution_time' => $execution_time . ' segundos',
             'timestamp' => current_time('mysql')
-        ));
+        );
+        
+        error_log('UNYCOP AJAX: Enviando respuesta exitosa: ' . json_encode($response_data));
+        wp_send_json_success($response_data);
+        
     } catch (Exception $e) {
-        error_log('UNYCOP AJAX ERROR: ' . $e->getMessage());
+        error_log('UNYCOP AJAX ERROR: Excepción capturada');
+        error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
+        error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
+        error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
+        error_log('UNYCOP AJAX ERROR: Trace: ' . $e->getTraceAsString());
+        
         wp_send_json_error('Error en actualización rápida: ' . $e->getMessage());
     }
 }
