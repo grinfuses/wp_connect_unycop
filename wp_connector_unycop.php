@@ -51,6 +51,13 @@ function sync_stock_from_csv() {
 
     // Abre el CSV y actualiza los productos
     if (($handle = fopen($csv_file, "r")) !== FALSE) {
+        // Leer y verificar BOM UTF-8 si existe
+        $bom = fread($handle, 3);
+        if ($bom !== "\xEF\xBB\xBF") {
+            // Si no hay BOM, volver al inicio del archivo
+            rewind($handle);
+        }
+        
         // Leer encabezados
         fgetcsv($handle, 1000, ";");
 
@@ -264,6 +271,9 @@ function generate_orders_csv($order_id = null) {
     error_log($log_message);
     
     $handle = fopen($csv_file, 'w');
+    
+    // Añadir BOM UTF-8 para mejor compatibilidad con Unycop
+    fwrite($handle, "\xEF\xBB\xBF");
 
     // Encabezados del CSV exactamente como en la documentación
     fputcsv($handle, array(
@@ -1223,181 +1233,104 @@ function unycop_quick_update_ajax_handler() {
         error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
         wp_send_json_error('Error fatal en sync_stock_and_price_only: ' . $e->getMessage());
     }
-    
-    // Código original comentado temporalmente - ACTIVANDO PASO A PASO
-    /*
-    try {
-        // Verificar POST data
-        if (!isset($_POST['nonce'])) {
-            error_log('UNYCOP AJAX ERROR: No se recibió nonce');
-            wp_send_json_error('No se recibió nonce');
-            return;
-        }
-        
-        error_log('UNYCOP AJAX: POST data recibida: ' . print_r($_POST, true));
-        
-        // Verificar nonce
-        if (!wp_verify_nonce($_POST['nonce'], 'unycop_quick_update_nonce')) {
-            error_log('UNYCOP AJAX ERROR: Nonce inválido');
-            wp_send_json_error('Error de seguridad - nonce inválido');
-            return;
-        }
-        
-        error_log('UNYCOP AJAX: Nonce válido');
-        
-        // Verificar permisos
-        if (!current_user_can('manage_options')) {
-            error_log('UNYCOP AJAX ERROR: Permisos insuficientes');
-            wp_send_json_error('Permisos insuficientes');
-            return;
-        }
-        
-        error_log('UNYCOP AJAX: Permisos verificados');
-        
-        // Verificar que WooCommerce esté cargado
-        if (!class_exists('WooCommerce')) {
-            error_log('UNYCOP AJAX ERROR: Clase WooCommerce no está disponible');
-            wp_send_json_error('WooCommerce no está disponible');
-            return;
-        }
-        
-        error_log('UNYCOP AJAX: WooCommerce clase disponible');
-        
-        // Verificar que WooCommerce esté disponible
-        if (!function_exists('wc_get_product_id_by_sku')) {
-            error_log('UNYCOP AJAX ERROR: WooCommerce no está disponible');
-            wp_send_json_error('WooCommerce no está disponible');
-            return;
-        }
-        
-        error_log('UNYCOP AJAX: Funciones WooCommerce disponibles');
-        
-        // Ejecutar la función de sincronización paso a paso
-        error_log('UNYCOP AJAX: Iniciando verificación paso a paso...');
-        
-        // Paso 1: Verificar archivo CSV
-        error_log('UNYCOP AJAX: Paso 1 - Verificando archivo CSV...');
-        $csv_file = find_stocklocal_csv();
-        if (!$csv_file) {
-            error_log('UNYCOP AJAX ERROR: Archivo CSV no encontrado');
-            wp_send_json_error('Archivo CSV no encontrado');
-            return;
-        }
-        error_log('UNYCOP AJAX: Archivo CSV encontrado: ' . $csv_file);
-        
-        // Paso 2: Verificar que el archivo existe y es legible
-        if (!file_exists($csv_file)) {
-            error_log('UNYCOP AJAX ERROR: Archivo CSV no existe: ' . $csv_file);
-            wp_send_json_error('Archivo CSV no existe');
-            return;
-        }
-        if (!is_readable($csv_file)) {
-            error_log('UNYCOP AJAX ERROR: Archivo CSV no es legible: ' . $csv_file);
-            wp_send_json_error('Archivo CSV no es legible');
-            return;
-        }
-        error_log('UNYCOP AJAX: Archivo CSV existe y es legible');
-        
-        // Paso 3: Intentar abrir el archivo
-        error_log('UNYCOP AJAX: Paso 3 - Intentando abrir archivo CSV...');
-        $handle = fopen($csv_file, "r");
-        if ($handle === FALSE) {
-            error_log('UNYCOP AJAX ERROR: No se pudo abrir el archivo CSV');
-            wp_send_json_error('No se pudo abrir el archivo CSV');
-            return;
-        }
-        error_log('UNYCOP AJAX: Archivo CSV abierto correctamente');
-        
-        // Paso 4: Leer encabezados
-        error_log('UNYCOP AJAX: Paso 4 - Leyendo encabezados...');
-        $headers = fgetcsv($handle, 1000, ";");
-        if ($headers === FALSE) {
-            error_log('UNYCOP AJAX ERROR: No se pudieron leer los encabezados');
-            fclose($handle);
-            wp_send_json_error('No se pudieron leer los encabezados del CSV');
-            return;
-        }
-        error_log('UNYCOP AJAX: Encabezados leídos: ' . print_r($headers, true));
-        
-        // Paso 5: Leer primera línea de datos
-        error_log('UNYCOP AJAX: Paso 5 - Leyendo primera línea de datos...');
-        $first_data = fgetcsv($handle, 1000, ";");
-        if ($first_data === FALSE) {
-            error_log('UNYCOP AJAX ERROR: No se pudo leer la primera línea de datos');
-            fclose($handle);
-            wp_send_json_error('No se pudo leer la primera línea de datos');
-            return;
-        }
-        error_log('UNYCOP AJAX: Primera línea de datos: ' . print_r($first_data, true));
-        
-        fclose($handle);
-        
-        // Paso 6: Ejecutar función completa (con manejo de errores)
-        error_log('UNYCOP AJAX: Paso 6 - Ejecutando sync_stock_and_price_only...');
-        $start_time = microtime(true);
-        
-        try {
-            $result = sync_stock_and_price_only();
-            $end_time = microtime(true);
-            $execution_time = round($end_time - $start_time, 2);
-            
-            error_log('UNYCOP AJAX: Resultado de sync_stock_and_price_only: ' . print_r($result, true));
-            error_log('UNYCOP AJAX: Tiempo de ejecución: ' . $execution_time . ' segundos');
-            
-            $response_data = array(
-                'products_updated' => $result['products_updated'],
-                'stock_changes' => $result['stock_changes'],
-                'price_changes' => $result['price_changes'],
-                'errors' => $result['errors'],
-                'execution_time' => $execution_time . ' segundos',
-                'timestamp' => current_time('mysql'),
-                'csv_file' => $csv_file,
-                'headers' => $headers,
-                'first_data_sample' => array_slice($first_data, 0, 3) // Solo primeros 3 campos
-            );
-            
-            error_log('UNYCOP AJAX: Enviando respuesta exitosa: ' . json_encode($response_data));
-            wp_send_json_success($response_data);
-            
-        } catch (Exception $e) {
-            error_log('UNYCOP AJAX ERROR: Excepción en sync_stock_and_price_only');
-            error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
-            error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
-            error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
-                    wp_send_json_error('Error en sync_stock_and_price_only: ' . $e->getMessage());
-    }
-    
-    } catch (Exception $e) {
-        error_log('UNYCOP AJAX ERROR: Excepción capturada');
-        error_log('UNYCOP AJAX ERROR: Mensaje: ' . $e->getMessage());
-        error_log('UNYCOP AJAX ERROR: Archivo: ' . $e->getFile());
-        error_log('UNYCOP AJAX ERROR: Línea: ' . $e->getLine());
-        error_log('UNYCOP AJAX ERROR: Trace: ' . $e->getTraceAsString());
-        
-        wp_send_json_error('Error en actualización rápida: ' . $e->getMessage());
-    }
-    */
 }
 
 // Handler AJAX de prueba simple
 function unycop_test_ajax_handler() {
+    error_log('UNYCOP TEST AJAX: ===== INICIO PRUEBA DE CONECTIVIDAD =====');
     error_log('UNYCOP TEST AJAX: Handler de prueba ejecutándose...');
     
     try {
-        // Respuesta simple
+        // Verificar POST data
+        if (!isset($_POST['nonce'])) {
+            error_log('UNYCOP TEST AJAX ERROR: No se recibió nonce');
+            wp_send_json_error('No se recibió nonce');
+            return;
+        }
+        
+        // Verificar nonce
+        if (!wp_verify_nonce($_POST['nonce'], 'unycop_test_nonce')) {
+            error_log('UNYCOP TEST AJAX ERROR: Nonce inválido');
+            wp_send_json_error('Error de seguridad - nonce inválido');
+            return;
+        }
+        
+        error_log('UNYCOP TEST AJAX: Nonce válido');
+        
+        // Verificar permisos
+        if (!current_user_can('manage_options')) {
+            error_log('UNYCOP TEST AJAX ERROR: Permisos insuficientes');
+            wp_send_json_error('Permisos insuficientes');
+            return;
+        }
+        
+        error_log('UNYCOP TEST AJAX: Permisos verificados');
+        
+        // Verificar WooCommerce
+        $wc_status = array();
+        if (class_exists('WooCommerce')) {
+            $wc_status['class_available'] = true;
+            $wc_status['version'] = WC()->version;
+        } else {
+            $wc_status['class_available'] = false;
+        }
+        
+        if (function_exists('wc_get_product_id_by_sku')) {
+            $wc_status['functions_available'] = true;
+        } else {
+            $wc_status['functions_available'] = false;
+        }
+        
+        // Verificar archivo CSV
+        $csv_file = find_stocklocal_csv();
+        $csv_status = array(
+            'file_found' => !empty($csv_file),
+            'file_path' => $csv_file,
+            'file_exists' => file_exists($csv_file),
+            'file_readable' => is_readable($csv_file),
+            'file_size' => file_exists($csv_file) ? filesize($csv_file) : 0
+        );
+        
+        // Verificar directorio de uploads
+        $upload_dir = wp_upload_dir();
+        $upload_status = array(
+            'basedir' => $upload_dir['basedir'],
+            'baseurl' => $upload_dir['baseurl'],
+            'writable' => wp_is_writable($upload_dir['basedir'])
+        );
+        
+        // Respuesta detallada
         $response_data = array(
             'message' => 'Handler de prueba funcionando correctamente',
             'timestamp' => current_time('mysql'),
             'php_version' => phpversion(),
-            'wordpress_version' => get_bloginfo('version')
+            'wordpress_version' => get_bloginfo('version'),
+            'plugin_version' => '4.0',
+            'woocommerce_status' => $wc_status,
+            'csv_status' => $csv_status,
+            'upload_status' => $upload_status,
+            'memory_limit' => ini_get('memory_limit'),
+            'max_execution_time' => ini_get('max_execution_time'),
+            'post_max_size' => ini_get('post_max_size'),
+            'upload_max_filesize' => ini_get('upload_max_filesize')
         );
         
-        error_log('UNYCOP TEST AJAX: Enviando respuesta de prueba');
+        error_log('UNYCOP TEST AJAX: Enviando respuesta de prueba exitosa');
+        error_log('UNYCOP TEST AJAX: Datos de respuesta: ' . json_encode($response_data));
         wp_send_json_success($response_data);
         
     } catch (Exception $e) {
-        error_log('UNYCOP TEST AJAX ERROR: ' . $e->getMessage());
+        error_log('UNYCOP TEST AJAX ERROR: Excepción capturada');
+        error_log('UNYCOP TEST AJAX ERROR: Mensaje: ' . $e->getMessage());
+        error_log('UNYCOP TEST AJAX ERROR: Archivo: ' . $e->getFile());
+        error_log('UNYCOP TEST AJAX ERROR: Línea: ' . $e->getLine());
         wp_send_json_error('Error en prueba: ' . $e->getMessage());
+    } catch (Error $e) {
+        error_log('UNYCOP TEST AJAX ERROR: Error fatal');
+        error_log('UNYCOP TEST AJAX ERROR: Mensaje: ' . $e->getMessage());
+        error_log('UNYCOP TEST AJAX ERROR: Archivo: ' . $e->getFile());
+        error_log('UNYCOP TEST AJAX ERROR: Línea: ' . $e->getLine());
+        wp_send_json_error('Error fatal en prueba: ' . $e->getMessage());
     }
 }
 
@@ -1429,9 +1362,15 @@ function sync_stock_from_csv_detailed() {
 
     // Abre el CSV y actualiza los productos
     if (($handle = fopen($csv_file, "r")) !== FALSE) {
+        // Leer y verificar BOM UTF-8 si existe
+        $bom = fread($handle, 3);
+        if ($bom !== "\xEF\xBB\xBF") {
+            // Si no hay BOM, volver al inicio del archivo
+            rewind($handle);
+        }
+        
         // Leer encabezados
-        $headers = fgetcsv($handle, 1000, ";");
-        $row_number = 1;
+        fgetcsv($handle, 1000, ";");
 
         while (($data = fgetcsv($handle, 1000, ";")) !== FALSE) {
             $row_number++;
